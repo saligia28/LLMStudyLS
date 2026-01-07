@@ -1,0 +1,56 @@
+{
+  "id": "week1",
+  "title": "LLM 基础入门",
+  "description": "从零开始学习大语言模型的基础知识",
+  "order": 1,
+  "steps": [
+    {
+      "id": "step1",
+      "title": "LLM 基础 + Prompt 结构与 API 调用",
+      "description": "学习 LLM 概念、Prompt 设计和 API 调用",
+      "docFile": "step1.md",
+      "codeFiles": ["test1.js"],
+      "tags": ["基础", "API", "Prompt"]
+    },
+    {
+      "id": "step2",
+      "title": "流式输出",
+      "description": "学习 Stream 流式输出的实现",
+      "docFile": "step2.md",
+      "codeFiles": ["test2.js"],
+      "tags": ["Stream"]
+    },
+    {
+      "id": "step3",
+      "title": "多轮对话",
+      "description": "实现多轮对话上下文管理",
+      "docFile": "step3.md",
+      "codeFiles": ["test3.js"],
+      "tags": ["对话", "上下文"]
+    },
+    {
+      "id": "step4",
+      "title": "进阶实践",
+      "description": "多种提示词技巧实践",
+      "docFile": "step4.md",
+      "codeDir": "test4",
+      "tags": ["进阶"]
+    },
+    {
+      "id": "step5",
+      "title": "高级应用",
+      "description": "更复杂的应用场景",
+      "docFile": "step5.md",
+      "codeDir": "test5",
+      "tags": ["高级"]
+    },
+    {
+      "id": "step6",
+      "title": "参数调优",
+      "description": "理解 Token、Temperature 等核心参数",
+      "docFile": "step6.md",
+      "codeDir": "test6",
+      "tags": ["参数", "调优"]
+    }
+  ]
+}

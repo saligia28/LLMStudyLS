@@ -1,0 +1,12 @@
+{
+  "title": "LLM 学习计划",
+  "description": "从入门到精通的 LLM 学习之旅",
+  "version": "1.0.0",
+  "autoScan": true,
+  "weeks": [
+    {
+      "id": "week1",
+      "enabled": true
+    }
+  ]
+}
