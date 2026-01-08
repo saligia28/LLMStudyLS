@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain } from 'electron'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import ptyService from './pty-servers.js'
+import ptyService from './pty-service.js'
 import 'dotenv/config'
 
 const __filename = fileURLToPath(import.meta.url)

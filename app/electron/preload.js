@@ -1,15 +1,15 @@
-const { contextBridge, ipcRender } = require('electron')
+const { contextBridge, ipcRenderer } = require('electron')
 
 contextBridge.exposeInMainWorld('electronAPI', {
   terminal: {
-    create: () => ipcRender.invoke('terminal:create'),
-    write: data => ipcRender.send('terminal:write', data),
-    resize: (cols, rows) => ipcRender.send('terminal:resize', cols, rows),
-    destroy: id => ipcRender.invoke('terminal:destroy', id),
+    create: () => ipcRenderer.invoke('terminal:create'),
+    write: data => ipcRenderer.send('terminal:write', data),
+    resize: (cols, rows) => ipcRenderer.send('terminal:resize', cols, rows),
+    destroy: id => ipcRenderer.invoke('terminal:destroy', id),
     onData: callback => {
       const handler = (_event, data) => callback(data)
-      ipcRender.on('terminal:data', handler)
-      return () => ipcRender.removeListener('terminal:data', handler)
+      ipcRenderer.on('terminal:data', handler)
+      return () => ipcRenderer.removeListener('terminal:data', handler)
     },
   },
 

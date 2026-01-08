@@ -3,7 +3,7 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const CONTENT_ROOT = path.join(__dirname, '../../../content')
+const CONTENT_ROOT = path.join(__dirname, '../../content')
 
 class ContentScanner {
   constructor() {
@@ -20,7 +20,7 @@ class ContentScanner {
     const weeks = []
 
     for (const weekConfig of config.weeks) {
-      if (!weekConfig.enable) continue
+      if (!weekConfig.enabled) continue
 
       const weekData = await this.scanWeek(weekConfig.id)
       if (weekData) {
@@ -54,7 +54,7 @@ class ContentScanner {
     const entries = await fs.readdir(CONTENT_ROOT, { withFileTypes: true })
     return entries
       .filter(e => e.isDirectory() && e.name.startsWith('week'))
-      .map(e => ({ id: e.name, enable: true }))
+      .map(e => ({ id: e.name, enabled: true }))
       .sort((a, b) => {
         const numA = parseInt(a.id.replace('week', ''))
         const numB = parseInt(b.id.replace('week', ''))
@@ -108,7 +108,7 @@ class ContentScanner {
     let docFiles = []
     try {
       const files = await fs.readdir(docsPath)
-      docFiles = files.filter(f => f.endsWith('.md').sort())
+      docFiles = files.filter(f => f.endsWith('.md')).sort()
     } catch {
       console.warn('docs 目录不存在')
     }
@@ -160,7 +160,7 @@ class ContentScanner {
     } else if (step.codeFiles) {
       codeFiles = step.codeFiles.map(f => ({
         name: f,
-        path: path.join(weekPath, 'codex', f),
+        path: path.join(weekPath, 'code', f),
       }))
     }
 
