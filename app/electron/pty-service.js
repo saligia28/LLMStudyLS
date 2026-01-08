@@ -45,7 +45,7 @@ class PtyService {
   }
 
   destroy(id) {
-    const terminal = this.terminals.get(id)
+    const terminal = this.terminal.get(id)
     if (terminal) {
       terminal.kill()
       this.terminal.delete(id)

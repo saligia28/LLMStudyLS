@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useCallback } from 'react'
+import React, { useEffect, useRef } from 'react'
 import { Terminal as XTerm } from 'xterm'
 import { FitAddon } from 'xterm-addon-fit'
 import { WebLinksAddon } from 'xterm-addon-web-links'
@@ -9,9 +9,14 @@ function Terminal() {
   const xtermRef = useRef(null)
   const fitAddonRef = useRef(null)
   const cleanupRef = useRef(null)
+  const initializedRef = useRef(false)
 
-  const initTerminal = useCallback(async () => {
-    if (!containerRef.current || xtermRef.current) return
+  useEffect(() => {
+    // 防止重复初始化
+    if (initializedRef.current || !containerRef.current) return
+    initializedRef.current = true
+
+    const container = containerRef.current
 
     const xterm = new XTerm({
       cursorBlink: true,
@@ -31,65 +36,72 @@ function Terminal() {
 
     xterm.loadAddon(fitAddon)
     xterm.loadAddon(webLinksAddon)
-    xterm.open(containerRef.current)
-
-    setTimeout(() => fitAddon.fit(), 100)
+    xterm.open(container)
 
     xtermRef.current = xterm
     fitAddonRef.current = fitAddon
 
-    if (window.electronAPI?.terminal) {
-      await window.electronAPI.terminal.create()
-
-      cleanupRef.current = window.electronAPI.terminal.onData(data => {
-        xterm.write(data)
-      })
-
-      xterm.onData(data => {
-        window.electronAPI.terminal.write(data)
-      })
-    } else {
-      xterm.writeln('\\x1b[33m终端功能需要在 Electron 环境中运行\\x1b[0m')
-      xterm.writeln('')
-    }
-  }, [])
-
-  useEffect(() => {
-    /* --------------------------------
-     1️⃣ 初始化终端（可能会在内部创建 xterm、fitAddon，并把清理函数存到 cleanupRef）
-     -------------------------------- */
-    initTerminal()
-
-    /* --------------------------------
-     2️⃣ 为窗口 resize 注册事件监听器
-        该函数会在窗口尺寸改变时让终端重新适配大小
-     -------------------------------- */
-
-    const handleResize = () => {
-      if (fitAddonRef.current) {
-        fitAddonRef.current.fit()
+    // 延迟 fit，确保容器有尺寸
+    const fitTerminal = () => {
+      try {
+        if (container.offsetWidth > 0 && container.offsetHeight > 0) {
+          fitAddon.fit()
+        }
+      } catch (e) {
+        console.warn('Terminal fit error:', e)
       }
+    }
+
+    setTimeout(fitTerminal, 150)
+
+    // 初始化 PTY
+    const initPty = async () => {
+      if (window.electronAPI?.terminal) {
+        try {
+          await window.electronAPI.terminal.create()
+
+          cleanupRef.current = window.electronAPI.terminal.onData(data => {
+            if (xtermRef.current) {
+              xtermRef.current.write(data)
+            }
+          })
+
+          xterm.onData(data => {
+            window.electronAPI.terminal.write(data)
+          })
+        } catch (e) {
+          console.error('PTY init error:', e)
+        }
+      } else {
+        xterm.writeln('\x1b[33m终端功能需要在 Electron 环境中运行\x1b[0m')
+        xterm.writeln('')
+      }
+    }
+
+    initPty()
+
+    // resize 处理
+    const handleResize = () => {
+      fitTerminal()
     }
 
     window.addEventListener('resize', handleResize)
 
-    /* --------------------------------
-     3️⃣ 清理函数（在卸载或依赖变化前调用）
-        - 移除 resize 监听
-        - 调用 initTerminal 返回的清理函数（如果有）
-        - 释放 xterm 实例
-     -------------------------------- */
+    // 清理函数
     return () => {
       window.removeEventListener('resize', handleResize)
       if (cleanupRef.current) {
         cleanupRef.current()
+        cleanupRef.current = null
       }
       if (xtermRef.current) {
         xtermRef.current.dispose()
         xtermRef.current = null
       }
+      fitAddonRef.current = null
+      initializedRef.current = false
     }
-  }, [initTerminal])
+  }, [])
 
   return <div ref={containerRef} className="tw-w-full tw-h-full" />
 }
