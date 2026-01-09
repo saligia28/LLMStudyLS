@@ -52,13 +52,23 @@ function StepDetail({ weekId, stepId }) {
   }
 
   const handleRunCode = () => {
-    if (!selectedCode || !window.electronAPI?.terminal) {
+    console.log('[Run] selectedCode:', selectedCode)
+    console.log('[Run] electronAPI:', window.electronAPI)
+    console.log('[Run] terminal:', window.electronAPI?.terminal)
+
+    if (!selectedCode) {
       message.warning('请先选择代码文件')
+      return
+    }
+
+    if (!window.electronAPI?.terminal) {
+      message.warning('终端未就绪，请稍后重试')
       return
     }
 
     // 构建运行命令
     const cmd = `node "${selectedCode.path}"\n`
+    console.log('[Run] Sending command:', cmd)
     window.electronAPI.terminal.write(cmd)
   }
 
@@ -75,9 +85,9 @@ function StepDetail({ weekId, stepId }) {
   }
 
   return (
-    <div className="tw-h-full tw-flex tw-flex-col tw-overflow-hidden">
+    <div className="tw-h-full tw-flex tw-flex-col tw-overflow-hidden tw-p-4">
       {/* 顶部标题 - 固定 */}
-      <div className="tw-flex-shrink-0 tw-bg-gray-50 tw-pb-2">
+      <div className="tw-flex-shrink-0 tw-pb-2">
         <h2 className="tw-text-xl tw-font-bold tw-m-0">{detail.title}</h2>
         {detail.description && <p className="tw-text-gray-500 tw-mt-1 tw-mb-0">{detail.description}</p>}
       </div>

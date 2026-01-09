@@ -7,7 +7,7 @@
   "files": ["dist/**/*", "electron/**/*", "server/**/*", "package.json"],
   "extraResources": [
     {
-      "from": "../content",
+      "from": "content",
       "to": "content",
       "filter": ["**/*"]
     }

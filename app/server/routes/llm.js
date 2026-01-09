@@ -14,7 +14,7 @@ router.post('/chat', async (req, res) => {
   try {
     const { messages, model = 'deepseek-chat', temperature = 0.7, max_tokens = 500 } = req.body
 
-    const response = client.chat.completions.create({
+    const response = await client.chat.completions.create({
       model,
       messages,
       temperature,
@@ -22,9 +22,9 @@ router.post('/chat', async (req, res) => {
     })
 
     res.json({
-      content: response.choices[0].message.content,
+      content: response.choices?.[0]?.message?.content || '',
       usage: response.usage,
-      finishReason: response.choices[0].finish_reason,
+      finishReason: response.choices?.[0]?.finish_reason,
     })
   } catch (error) {
     res.status(500).json({ error: error.message })
@@ -49,14 +49,14 @@ router.post('/chat/stream', async (req, res) => {
     })
 
     for await (const chunk of stream) {
-      const content = stream.choices[0]?.delta?.content || ''
+      const content = chunk.choices[0]?.delta?.content || ''
       if (content) {
         res.write(`data: ${JSON.stringify({ content })}\n\n`)
       }
-
-      res.write(`data: [DONE]\n\n`)
-      res.end()
     }
+
+    res.write(`data: [DONE]\n\n`)
+    res.end()
   } catch (error) {
     res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`)
     res.end()

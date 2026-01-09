@@ -3,7 +3,22 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const CONTENT_ROOT = path.join(__dirname, '../../content')
+
+// 判断是否为打包后的生产环境
+function isPackaged() {
+  return __dirname.includes('app.asar')
+}
+
+// 根据环境确定内容目录路径
+function getContentRoot() {
+  if (isPackaged() && process.resourcesPath) {
+    return path.join(process.resourcesPath, 'content')
+  }
+  // 开发环境：app/server/services -> app/content
+  return path.join(__dirname, '../../content')
+}
+
+const CONTENT_ROOT = getContentRoot()
 
 class ContentScanner {
   constructor() {
@@ -173,12 +188,14 @@ class ContentScanner {
   }
 
   async getCodeContent(filePath) {
-    const normalizedPath = path.normalize(filePath)
-    if (!normalizedPath.startsWith(CONTENT_ROOT)) {
+    const normalizedPath = path.resolve(CONTENT_ROOT, path.normalize(filePath))
+    const normalizedRoot = path.resolve(CONTENT_ROOT)
+
+    if (!normalizedPath.startsWith(normalizedRoot + path.sep)) {
       throw new Error('Access denied: path outside content directory')
     }
 
-    return await fs.readFile(filePath, 'utf-8')
+    return await fs.readFile(normalizedPath, 'utf-8')
   }
 }
 

@@ -42,7 +42,9 @@ function App() {
   if (loading) {
     return (
       <div className="tw-h-screen tw-flex tw-items-center tw-justify-center">
-        <Spin size="large" tip="加载中..."></Spin>
+        <Spin size="large" tip="加载中...">
+          <div className="tw-p-12" />
+        </Spin>
       </div>
     )
   }
@@ -71,23 +73,40 @@ function App() {
           </div>
         </Sider>
 
-        <Layout className="tw-flex tw-flex-col tw-overflow-hidden">
-          {/* 主内容区 - 可滚动 */}
-          <Content className="tw-flex-1 tw-overflow-auto tw-bg-gray-50 tw-p-4">
-            {selectedItem ? (
-              <StepDetail weekId={selectedItem.weekId} stepId={selectedItem.stepId} />
-            ) : (
-              <div className="tw-h-full tw-flex tw-items-center tw-justify-center tw-text-gray-400">
-                请从左侧选择学习内容
-              </div>
-            )}
-          </Content>
+        {/* 主内容区域 - 包含详情和终端 */}
+        <Content className="tw-flex-1 tw-overflow-hidden tw-bg-gray-50 tw-relative">
+          <div className="tw-h-full tw-flex">
+            {/* 左侧详情区域 - 60% 宽度 */}
+            <div className="tw-w-3/5 tw-h-full tw-flex tw-flex-col tw-overflow-hidden">
+              {selectedItem ? (
+                <StepDetail weekId={selectedItem.weekId} stepId={selectedItem.stepId} />
+              ) : (
+                <div className="tw-h-full tw-flex tw-items-center tw-justify-center tw-text-gray-400">
+                  请从左侧选择学习内容
+                </div>
+              )}
+            </div>
 
-          {/* 终端区 - 固定高度 */}
-          <div className="tw-h-64 tw-flex-shrink-0 tw-bg-black tw-border-t tw-border-gray-300">
-            <Terminal />
+            {/* 右侧终端区域 - 40% 宽度，悬浮样式 */}
+            <div className="tw-w-2/5 tw-h-full tw-p-3 tw-pl-0">
+              <div className="tw-h-full tw-bg-gray-900 tw-rounded-lg tw-shadow-lg tw-overflow-hidden tw-flex tw-flex-col tw-border tw-border-gray-700">
+                {/* 终端标题栏 */}
+                <div className="tw-h-8 tw-bg-gray-800 tw-flex tw-items-center tw-px-3 tw-flex-shrink-0 tw-border-b tw-border-gray-700">
+                  <div className="tw-flex tw-gap-1.5">
+                    <span className="tw-w-3 tw-h-3 tw-rounded-full tw-bg-red-500" />
+                    <span className="tw-w-3 tw-h-3 tw-rounded-full tw-bg-yellow-500" />
+                    <span className="tw-w-3 tw-h-3 tw-rounded-full tw-bg-green-500" />
+                  </div>
+                  <span className="tw-text-gray-400 tw-text-xs tw-ml-3">Terminal</span>
+                </div>
+                {/* 终端内容 - 独立滚动 */}
+                <div className="tw-flex-1 tw-overflow-hidden terminal-container">
+                  <Terminal />
+                </div>
+              </div>
+            </div>
           </div>
-        </Layout>
+        </Content>
       </Layout>
     </Layout>
   )

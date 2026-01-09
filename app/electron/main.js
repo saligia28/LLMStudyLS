@@ -44,10 +44,12 @@ function setupIPC() {
   ipcMain.handle('terminal:create', async _event => {
     const id = Date.now().toString()
     currentTerminalId = id
+    console.log('[Main] Creating terminal with id:', id)
 
     const terminal = ptyService.create(id)
 
     terminal.onData(data => {
+      console.log('[Main] PTY data:', data.substring(0, 50))
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('terminal:data', data)
       }
@@ -57,18 +59,22 @@ function setupIPC() {
   })
 
   ipcMain.on('terminal:write', (_event, data) => {
+    console.log('[Main] terminal:write received, currentTerminalId:', currentTerminalId, 'data:', data)
     if (currentTerminalId) {
       ptyService.write(currentTerminalId, data)
+    } else {
+      console.warn('[Main] No terminal id, cannot write')
     }
   })
 
-  ipcMain.on('terminal:resize', (_event, cols, data) => {
+  ipcMain.on('terminal:resize', (_event, cols, rows) => {
     if (currentTerminalId) {
-      ptyService.resize(currentTerminalId, cols, data)
+      ptyService.resize(currentTerminalId, cols, rows)
     }
   })
 
   ipcMain.handle('terminal:destroy', async (_event, id) => {
+    console.log('[Main] Destroying terminal:', id || currentTerminalId)
     ptyService.destroy(id || currentTerminalId)
     if (id === currentTerminalId) {
       currentTerminalId = null
@@ -88,7 +94,14 @@ app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', () => {
+  // 清理所有 PTY
+  ptyService.destroyAll()
   if (process.platform !== 'darwin') {
     app.quit()
   }
+})
+
+app.on('before-quit', () => {
+  // 确保退出前清理所有 PTY
+  ptyService.destroyAll()
 })
