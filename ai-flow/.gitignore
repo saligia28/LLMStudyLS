@@ -25,3 +25,9 @@ Thumbs.db
 .vscode/
 *.swp
 *.swo
+
+# AI配置相关
+CLAUDE.md
+AGENTS.md
+.claude/
+.codex/
