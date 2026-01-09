@@ -34,11 +34,13 @@ npm run electron:build # Full Electron app build
 ### Three-Layer Structure
 
 1. **Electron Main Process** (`app/electron/`)
+
    - `main.js` - Window management, IPC setup for terminal communication
    - `pty-service.js` - PTY terminal service using node-pty
    - `preload.js` - Context bridge for renderer process
 
 2. **Express Backend Server** (`app/server/`)
+
    - `index.js` - Server entry (port 3001), mounts API routes
    - `routes/content.js` - Serves learning content structure and step details
    - `routes/llm.js` - Proxies LLM API calls (DeepSeek via OpenAI-compatible SDK)
@@ -55,6 +57,7 @@ npm run electron:build # Full Electron app build
 ### Content System
 
 Learning content lives in `content/` directory with this structure:
+
 ```
 content/
 ├── content.config.json    # Root config with enabled weeks
@@ -69,6 +72,7 @@ The `ContentScanner` service auto-detects weeks and steps if config files are mi
 ## Environment Variables
 
 Create `.env` in `app/` directory:
+
 ```
 SERVER_PORT=3001
 WINDOW_SERVER_PORT=5173

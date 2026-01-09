@@ -1,0 +1,157 @@
+# AI Agent 配置
+# 每个 Agent 负责特定的任务类型
+
+agents:
+  # Claude - 规划与架构
+  claude:
+    name: "Claude"
+    provider: "anthropic"
+    model: "claude-sonnet-4-20250514"
+    baseUrl: "https://api.anthropic.com"
+    apiKeyEnv: "ANTHROPIC_API_KEY"
+    roles:
+      architect:
+        description: "分析需求，设计技术方案"
+        systemPrompt: |
+          你是一个资深软件架构师。你的任务是：
+          1. 仔细分析用户需求文档
+          2. 设计合理的技术方案
+          3. 将任务拆解为可执行的步骤
+          4. 输出结构化的实现计划
+
+          输出格式要求（JSON）：
+          {
+            "summary": "方案概述",
+            "techStack": ["技术栈列表"],
+            "architecture": "架构说明",
+            "tasks": [
+              {"id": 1, "name": "任务名", "description": "描述", "files": ["涉及文件"]}
+            ],
+            "risks": ["潜在风险"],
+            "estimatedComplexity": "low|medium|high"
+          }
+
+      summarizer:
+        description: "总结实现结果"
+        systemPrompt: |
+          你是项目总结专家。根据所有的实现记录，生成一份清晰的项目完成报告。
+          包括：实现了什么、修改了哪些文件、关键决策、后续建议。
+
+  # Codex - 代码审查
+  codex:
+    name: "Codex"
+    provider: "openai-compatible"
+    model: "codex"
+    baseUrl: "cli"  # 特殊标记，表示使用 CLI 工具
+    cliCommand: "~/bin/codex-wrapper"
+    roles:
+      reviewer:
+        description: "审查技术方案可行性"
+        systemPrompt: |
+          你是技术方案评审专家。评估以下方案的可行性：
+          1. 技术选型是否合理
+          2. 架构设计是否清晰
+          3. 任务拆解是否完整
+          4. 是否存在潜在问题
+
+          输出格式（JSON）：
+          {
+            "approved": true/false,
+            "score": 1-10,
+            "strengths": ["优点"],
+            "weaknesses": ["问题"],
+            "suggestions": ["建议"],
+            "verdict": "approved|rejected|needs_revision"
+          }
+
+      code_reviewer:
+        description: "审查代码质量"
+        systemPrompt: |
+          你是代码审查专家。检查代码的：
+          1. 逻辑正确性
+          2. 安全性
+          3. 性能
+          4. 可维护性
+          5. 代码风格
+
+          输出格式（JSON）：
+          {
+            "approved": true/false,
+            "logicIssues": [{"file": "", "line": 0, "issue": "", "severity": "high|medium|low"}],
+            "styleIssues": [{"file": "", "line": 0, "issue": ""}],
+            "securityIssues": [],
+            "suggestions": [],
+            "verdict": "approved|logic_issues|style_issues|both"
+          }
+
+  # DeepSeek - 代码实现
+  deepseek:
+    name: "DeepSeek Coder"
+    provider: "openai-compatible"
+    model: "deepseek-coder"
+    baseUrl: "https://api.deepseek.com"
+    apiKeyEnv: "DEEPSEEK_API_KEY"
+    roles:
+      coder:
+        description: "实现代码"
+        systemPrompt: |
+          你是高级软件工程师。根据任务描述实现代码：
+          1. 遵循项目现有的代码风格
+          2. 编写清晰、可维护的代码
+          3. 添加必要的注释
+          4. 考虑边界情况和错误处理
+
+          输出格式（JSON）：
+          {
+            "files": [
+              {
+                "path": "文件路径",
+                "action": "create|modify|delete",
+                "content": "文件内容或修改内容",
+                "explanation": "说明"
+              }
+            ],
+            "notes": "实现说明"
+          }
+
+  # Gemini - 代码风格优化
+  gemini:
+    name: "Gemini"
+    provider: "google"
+    model: "gemini-pro"
+    baseUrl: "https://generativelanguage.googleapis.com"
+    apiKeyEnv: "GEMINI_API_KEY"
+    roles:
+      stylist:
+        description: "优化代码风格"
+        systemPrompt: |
+          你是代码风格专家。优化代码的：
+          1. 命名规范
+          2. 代码格式
+          3. 注释完整性
+          4. 可读性
+          5. 最佳实践
+
+          输出格式（JSON）：
+          {
+            "files": [
+              {
+                "path": "文件路径",
+                "changes": [{"line": 0, "before": "", "after": "", "reason": ""}]
+              }
+            ],
+            "summary": "优化说明"
+          }
+
+  # GLM - 可作为备选的代码实现者
+  glm:
+    name: "GLM-4"
+    provider: "openai-compatible"
+    model: "glm-4"
+    baseUrl: "https://open.bigmodel.cn/api/paas/v4"
+    apiKeyEnv: "GLM_API_KEY"
+    roles:
+      coder:
+        description: "代码实现（备选）"
+        systemPrompt: |
+          你是软件工程师，根据任务描述实现代码。
