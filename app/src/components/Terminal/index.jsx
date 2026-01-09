@@ -90,8 +90,21 @@ function Terminal() {
 
     window.addEventListener('resize', handleResize)
 
+    // 监听容器尺寸变化（侧边栏展开/收起等场景）
+    let resizeObserver = null
+    if (containerRef.current) {
+      resizeObserver = new ResizeObserver(() => {
+        // 使用 requestAnimationFrame 避免频繁调用
+        requestAnimationFrame(handleResize)
+      })
+      resizeObserver.observe(containerRef.current)
+    }
+
     return () => {
       window.removeEventListener('resize', handleResize)
+      if (resizeObserver) {
+        resizeObserver.disconnect()
+      }
       if (cleanupRef.current) {
         cleanupRef.current()
       }
