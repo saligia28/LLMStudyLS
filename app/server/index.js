@@ -24,4 +24,22 @@ server.listen(PORT, () => {
   console.log(`服务器运行在 http://localhost:${PORT}`)
 })
 
+// 优雅退出处理
+const gracefulShutdown = (signal) => {
+  console.log(`\n收到 ${signal} 信号，正在关闭服务器...`)
+  server.close(() => {
+    console.log('服务器已关闭')
+    process.exit(0)
+  })
+
+  // 如果 5 秒内未能关闭，强制退出
+  setTimeout(() => {
+    console.log('强制关闭服务器')
+    process.exit(1)
+  }, 5000)
+}
+
+process.on('SIGINT', () => gracefulShutdown('SIGINT'))
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'))
+
 export default server
