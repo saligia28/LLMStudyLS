@@ -7,6 +7,10 @@
     {
       "id": "week1",
       "enabled": true
+    },
+    {
+      "id": "week2",
+      "enabled": true
     }
   ]
 }

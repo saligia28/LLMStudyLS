@@ -1,0 +1,62 @@
+{
+  "id": "week2",
+  "title": "流式输出（SSE）+ 前端渲染",
+  "description": "学习 SSE 协议、流式渲染和完整聊天应用开发",
+  "order": 2,
+  "steps": [
+    {
+      "id": "step8",
+      "title": "SSE 协议基础",
+      "description": "学习 EventSource API 和 SSE 数据格式",
+      "docFile": "step8.md",
+      "codeDir": "sse-basics",
+      "canManual": false,
+      "tags": ["SSE", "EventSource", "协议"]
+    },
+    {
+      "id": "step9",
+      "title": "Node SSE 测试服务器",
+      "description": "从零搭建 SSE 测试服务器",
+      "docFile": "step9.md",
+      "codeDir": "sse-test-server",
+      "canManual": false,
+      "tags": ["Node", "Express", "服务器"]
+    },
+    {
+      "id": "step10",
+      "title": "前端流式渲染",
+      "description": "用 Fetch + ReadableStream 实现打字机效果",
+      "docFile": "step10.md",
+      "codeDir": "stream-render",
+      "canManual": false,
+      "tags": ["Fetch", "ReadableStream", "渲染"]
+    },
+    {
+      "id": "step11",
+      "title": "异常处理与停止控制",
+      "description": "实现错误捕获、重试和手动停止",
+      "docFile": "step11.md",
+      "codeDir": "error-handling",
+      "canManual": false,
+      "tags": ["异常处理", "AbortController"]
+    },
+    {
+      "id": "step12",
+      "title": "完整流式聊天",
+      "description": "连接真实 API 实现多轮对话",
+      "docFile": "step12.md",
+      "codeDir": "chat-app",
+      "canManual": false,
+      "tags": ["API", "聊天", "多轮对话"]
+    },
+    {
+      "id": "step13",
+      "title": "聊天 UI 样式设计",
+      "description": "构建简洁美观的聊天界面",
+      "docFile": "step13.md",
+      "codeDir": "chat-ui",
+      "canManual": false,
+      "tags": ["CSS", "UI", "样式"]
+    }
+  ]
+}

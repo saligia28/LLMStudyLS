@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
-import { Layout, Spin, message } from 'antd'
+import { Layout, Spin, message, Button, Tooltip } from 'antd'
+import { SyncOutlined } from '@ant-design/icons'
 import Sidebar from './components/Sidebar'
 import StepDetail from './pages/StepDetail'
 import Terminal from './components/Terminal'
@@ -10,6 +11,7 @@ const { Sider, Content } = Layout
 function App() {
   const [collapsed, setCollapsed] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [syncing, setSyncing] = useState(false)
   const [structure, setStructure] = useState(null)
   const [selectedItem, setSelectedItem] = useState(null) // { weekId, stepId }
 
@@ -32,6 +34,19 @@ function App() {
       message.error('加载内容失败:' + error.message)
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleSyncContent = async () => {
+    try {
+      setSyncing(true)
+      const data = await fetchContentStructure(true)
+      setStructure(data)
+      message.success('文档同步成功')
+    } catch (error) {
+      message.error('同步失败: ' + error.message)
+    } finally {
+      setSyncing(false)
     }
   }
 
@@ -65,8 +80,19 @@ function App() {
           theme="light"
           style={{ height: '100%', overflow: 'hidden' }}
         >
-          <div className="tw-h-12 tw-flex tw-items-center tw-justify-center tw-border-b tw-border-gray-200 tw-flex-shrink-0">
-            <span className="tw-font-bold tw-text-lg">{collapsed ? 'LLM' : structure?.title || 'LLM 学习'}</span>
+          <div className="tw-h-12 tw-flex tw-items-center tw-justify-between tw-px-3 tw-border-b tw-border-gray-200 tw-flex-shrink-0">
+            <span className="tw-font-bold tw-text-lg tw-truncate">{collapsed ? 'LLM' : structure?.title || 'LLM 学习'}</span>
+            {!collapsed && (
+              <Tooltip title="同步文档">
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<SyncOutlined spin={syncing} />}
+                  onClick={handleSyncContent}
+                  loading={syncing}
+                />
+              </Tooltip>
+            )}
           </div>
           <div className="tw-flex-1 tw-overflow-y-auto">
             <Sidebar structure={structure} selectedItem={selectedItem} onSelect={handleSelect} collapsed={collapsed} />
