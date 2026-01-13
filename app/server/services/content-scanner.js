@@ -170,7 +170,7 @@ class ContentScanner {
             path: path.join(codeDirPath, f),
           }))
       } catch {
-        console.warn('目录不穿在')
+        console.warn('目录不存在')
       }
     } else if (step.codeFiles) {
       codeFiles = step.codeFiles.map(f => ({
