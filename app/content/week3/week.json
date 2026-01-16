@@ -1,0 +1,62 @@
+{
+  "id": "week3",
+  "title": "对话记忆管理",
+  "description": "学习 Context Window、Token 预算和各种记忆管理策略",
+  "order": 3,
+  "steps": [
+    {
+      "id": "step15",
+      "title": "理解上下文和 Token 预算",
+      "description": "深入理解 Context Window 和 Token 预算管理",
+      "docFile": "step15.md",
+      "codeDir": "memory-basics",
+      "canManual": false,
+      "tags": ["Context Window", "Token", "预算管理"]
+    },
+    {
+      "id": "step16",
+      "title": "短期对话记忆模块",
+      "description": "实现基于 Token 预算的短期记忆管理",
+      "docFile": "step16.md",
+      "codeDir": "short-term-memory",
+      "canManual": false,
+      "tags": ["短期记忆", "FIFO", "截断策略"]
+    },
+    {
+      "id": "step17",
+      "title": "自动总结功能",
+      "description": "实现对话历史的自动总结压缩",
+      "docFile": "step17.md",
+      "codeDir": "summary-memory",
+      "canManual": false,
+      "tags": ["总结", "压缩", "长对话"]
+    },
+    {
+      "id": "step18",
+      "title": "滑窗策略",
+      "description": "实现 Conversation Window 滑动窗口策略",
+      "docFile": "step18.md",
+      "codeDir": "sliding-window",
+      "canManual": false,
+      "tags": ["滑窗", "窗口管理", "动态调整"]
+    },
+    {
+      "id": "step19",
+      "title": "系统提示注入",
+      "description": "动态构建和注入系统提示控制 LLM 行为",
+      "docFile": "step19.md",
+      "codeDir": "system-prompt",
+      "canManual": false,
+      "tags": ["System Prompt", "模板", "动态注入"]
+    },
+    {
+      "id": "step20",
+      "title": "性能测试",
+      "description": "对不同记忆策略进行压力测试和性能对比",
+      "docFile": "step20.md",
+      "codeDir": "performance-test",
+      "canManual": false,
+      "tags": ["性能测试", "对比分析", "优化"]
+    }
+  ]
+}

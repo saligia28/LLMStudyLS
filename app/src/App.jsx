@@ -78,24 +78,25 @@ function App() {
           collapsedWidth={80}
           className="tw-bg-white tw-border-r tw-border-gray-200 tw-flex tw-flex-col"
           theme="light"
-          style={{ height: '100%', overflow: 'hidden' }}
         >
-          <div className="tw-h-12 tw-flex tw-items-center tw-justify-between tw-px-3 tw-border-b tw-border-gray-200 tw-flex-shrink-0">
-            <span className="tw-font-bold tw-text-lg tw-truncate">{collapsed ? 'LLM' : structure?.title || 'LLM 学习'}</span>
-            {!collapsed && (
-              <Tooltip title="同步文档">
-                <Button
-                  type="text"
-                  size="small"
-                  icon={<SyncOutlined spin={syncing} />}
-                  onClick={handleSyncContent}
-                  loading={syncing}
-                />
-              </Tooltip>
-            )}
-          </div>
-          <div className="tw-flex-1 tw-overflow-y-auto">
-            <Sidebar structure={structure} selectedItem={selectedItem} onSelect={handleSelect} collapsed={collapsed} />
+          <div className="tw-h-full tw-flex tw-flex-col tw-min-h-0">
+            <div className="tw-h-12 tw-flex tw-items-center tw-justify-between tw-px-3 tw-border-b tw-border-gray-200 tw-flex-shrink-0">
+              <span className="tw-font-bold tw-text-lg tw-truncate">{collapsed ? 'LLM' : structure?.title || 'LLM 学习'}</span>
+              {!collapsed && (
+                <Tooltip title="同步文档">
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<SyncOutlined spin={syncing} />}
+                    onClick={handleSyncContent}
+                    loading={syncing}
+                  />
+                </Tooltip>
+              )}
+            </div>
+            <div className="tw-flex-1 tw-min-h-0 tw-overflow-y-auto">
+              <Sidebar structure={structure} selectedItem={selectedItem} onSelect={handleSelect} collapsed={collapsed} />
+            </div>
           </div>
         </Sider>
 
