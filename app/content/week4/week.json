@@ -1,0 +1,78 @@
+{
+  "id": "week4",
+  "title": "Week 4: Node AI 后端封装",
+  "description": "学习如何设计和构建一个生产级的 Node.js AI 后端应用，包括项目结构设计、多提供商支持、中间件系统、日志系统、错误处理和代码重构。",
+  "order": 4,
+  "steps": [
+    {
+      "id": "step22",
+      "title": "设计后端项目结构（routes、services、utils）",
+      "description": "学习如何设计清晰、可维护、可扩展的 Node.js 后端项目结构，理解分层架构的设计思想和单一职责原则。",
+      "docFile": "step22.md",
+      "codeDir": "step22",
+      "order": 22,
+      "canManual": false,
+      "tags": ["架构", "分层设计"]
+    },
+    {
+      "id": "step23",
+      "title": "写一个统一的 AI 请求封装函数",
+      "description": "学习适配器模式，实现支持多个 AI 提供商（OpenAI、DeepSeek、Claude）的统一接口，提高代码的可扩展性和可维护性。",
+      "docFile": "step23.md",
+      "codeDir": "step23",
+      "order": 23,
+      "canManual": false,
+      "tags": ["适配器模式", "封装"]
+    },
+    {
+      "id": "step24",
+      "title": "加入跨域、中间件、环境变量管理",
+      "description": "学习 CORS 原理和配置、Express 中间件的使用和自定义、环境变量的规范管理，构建安全、规范、易配置的后端应用。",
+      "docFile": "step24.md",
+      "codeDir": "step24",
+      "order": 24,
+      "canManual": false,
+      "tags": ["CORS", "中间件", "环境变量"]
+    },
+    {
+      "id": "step25",
+      "title": "加入日志系统（简单版）",
+      "description": "学习使用 Winston 构建专业的日志系统，实现日志分级、文件持久化、日志轮转和结构化日志，提升应用的可观测性。",
+      "docFile": "step25.md",
+      "codeDir": "step25",
+      "order": 25,
+      "canManual": false,
+      "tags": ["日志", "Winston"]
+    },
+    {
+      "id": "step26",
+      "title": "加入统一错误处理",
+      "description": "学习构建健壮的错误处理系统，实现自定义错误类、统一错误处理中间件和错误码设计，提升用户体验和调试效率。",
+      "docFile": "step26.md",
+      "codeDir": "step26",
+      "order": 26,
+      "canManual": false,
+      "tags": ["错误处理", "中间件"]
+    },
+    {
+      "id": "step27",
+      "title": "尝试一次重构，把 API 逻辑抽离成独立模块",
+      "description": "学习代码重构的原则和方法，识别代码坏味道,提取控制器层、验证器和工具函数，提高代码的可维护性和可测试性。",
+      "docFile": "step27.md",
+      "codeDir": "step27",
+      "order": 27,
+      "canManual": false,
+      "tags": ["重构", "控制器"]
+    },
+    {
+      "id": "step28",
+      "title": "完成通用 AI Router 文档",
+      "description": "总结 Week 4 的所有学习内容，编写完整的 API 文档、部署指南和最佳实践，构建一个可复用的通用 AI 后端解决方案。",
+      "docFile": "step28.md",
+      "codeDir": "step28",
+      "order": 28,
+      "canManual": false,
+      "tags": ["文档", "总结"]
+    }
+  ]
+}
