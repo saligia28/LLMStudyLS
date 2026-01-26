@@ -1,0 +1,78 @@
+{
+  "id": "week5",
+  "title": "Week 5: Function Calling 深入实践",
+  "description": "深入学习 LLM 的 Function Calling 能力,从理解 Function Schema 到构建完整的函数调用应用,掌握参数验证、类型安全和实战技巧。",
+  "order": 5,
+  "steps": [
+    {
+      "id": "step29",
+      "title": "理解 function schema",
+      "description": "学习 Function Calling 的核心概念,理解 Function Schema 的结构和设计原则,掌握如何让 AI 理解和调用函数。",
+      "docFile": "step29.md",
+      "codeDir": "step29",
+      "order": 29,
+      "canManual": false,
+      "tags": ["Function Calling", "Schema 设计"]
+    },
+    {
+      "id": "step30",
+      "title": "写两个最小函数: getTime / sum",
+      "description": "实现真正可执行的 JavaScript 函数,为函数定义对应的 Function Schema,学习函数实现和 Schema 定义的对应关系。",
+      "docFile": "step30.md",
+      "codeDir": "step30",
+      "order": 30,
+      "canManual": false,
+      "tags": ["函数实现", "参数验证"]
+    },
+    {
+      "id": "step31",
+      "title": "让模型根据内容自动调用函数",
+      "description": "实现完整的函数调用流程,让 AI 根据用户输入自动选择并调用合适的函数,理解 AI 的决策过程和多轮对话。",
+      "docFile": "step31.md",
+      "codeDir": "step31",
+      "order": 31,
+      "canManual": false,
+      "tags": ["自动调用", "函数执行器"]
+    },
+    {
+      "id": "step32",
+      "title": "调试 function_call → arguments 的 JSON 化",
+      "description": "掌握安全的 JSON 解析方法,处理 arguments 字段的各种边界情况,实现健壮的参数处理逻辑。",
+      "docFile": "step32.md",
+      "codeDir": "step32",
+      "order": 32,
+      "canManual": false,
+      "tags": ["JSON 解析", "错误处理"]
+    },
+    {
+      "id": "step33",
+      "title": "加入结构化返回 (zod 也可以)",
+      "description": "使用 Zod 验证库确保函数参数和返回值的类型安全,实现端到端的类型验证,提升代码质量。",
+      "docFile": "step33.md",
+      "codeDir": "step33",
+      "order": 33,
+      "canManual": false,
+      "tags": ["Zod", "类型安全"]
+    },
+    {
+      "id": "step34",
+      "title": "做一个天气查询 demo",
+      "description": "结合前面所学知识,构建一个完整的天气查询应用,实现多轮对话、函数调用和用户交互,掌握实战技巧。",
+      "docFile": "step34.md",
+      "codeDir": "step34",
+      "order": 34,
+      "canManual": false,
+      "tags": ["实战项目", "天气查询"]
+    },
+    {
+      "id": "step35",
+      "title": "整理文档",
+      "description": "总结 Function Calling 的完整知识体系,梳理最佳实践和代码模板,构建可复用的函数调用解决方案。",
+      "docFile": "step35.md",
+      "codeDir": "step35",
+      "order": 35,
+      "canManual": false,
+      "tags": ["文档", "最佳实践"]
+    }
+  ]
+}

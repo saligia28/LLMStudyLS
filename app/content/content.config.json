@@ -19,6 +19,10 @@
     {
       "id": "week4",
       "enabled": true
+    },
+    {
+      "id": "week5",
+      "enabled": true
     }
   ]
 }
