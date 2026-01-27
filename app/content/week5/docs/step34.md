@@ -1,67 +1,125 @@
-# Step 34: Function Calling｜做一个"天气查询"demo
+# Step 34: Function Calling｜基于 AI-backend 的天气查询 Demo
 
 ## 学习目标
 
-这个任务的本质是回答一个核心问题:**如何结合前面所学的知识,构建一个完整的 Function Calling 应用**。
+这个任务的本质是回答一个核心问题:**如何基于 AI-backend 的企业级架构,构建一个完整的 Function Calling 应用**。
 
 通过本教程,你将:
 
-1. 实现一个真实的天气查询功能
-2. 集成 AI 函数调用流程
-3. 处理多轮对话和上下文
-4. 构建用户友好的交互界面
-5. 完成端到端的 Function Calling 应用
+1. 基于 AI-backend 架构实现天气查询功能
+2. 应用前面学习的所有知识:Adapter、Validator、Executor、Zod
+3. 构建完整的多轮对话流程
+4. 实现生产级的错误处理和日志记录
+5. 理解如何在真实项目中集成 Function Calling
+
+> **实战项目**: 本教程将在 AI-backend 的基础上构建完整的天气查询应用,展示企业级的最佳实践。
 
 ---
 
-## 一、项目概览
+## 一、项目架构
 
-### 1.1 功能需求
+### 1.1 在 AI-backend 中的位置
+
+```
+AI-backend/
+├── functions/                    # 函数实现
+│   ├── getTime.js               # ✓ 已有
+│   ├── sum.js                   # ✓ 已有
+│   └── getWeather.js            # ← 新增 (本节实现)
+│
+├── schemas/                      # Function Schema
+│   ├── getTime.schema.js        # ✓ 已有
+│   ├── sum.schema.js            # ✓ 已有
+│   └── getWeather.schema.js     # ← 新增
+│
+├── src/
+│   ├── controllers/
+│   │   └── chat.controller.js   # ✓ 已支持 Function Calling
+│   ├── services/
+│   │   └── ai.service.js        # ✓ 已支持 functions 参数
+│   ├── adapters/
+│   │   ├── deepseek.adapter.js  # ✓ 已支持 functions
+│   │   └── openai.adapter.js    # ✓ 已支持 functions
+│   ├── utils/
+│   │   ├── functionExecutor.js  # ✓ 已实现
+│   │   └── logger.js            # ✓ 完整日志
+│   └── validators/
+│       └── chatValidator.js     # ✓ 已支持 functions 验证
+│
+└── server.js                     # 应用入口
+
+完整的 Function Calling 基础架构已就绪
+只需添加新函数即可扩展功能!
+```
+
+### 1.2 完整的请求流程
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│              天气查询 Demo 功能                                │
+│     AI-backend 天气查询完整流程                                │
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
-│   用户输入:                                                  │
-│   - "北京今天天气怎么样?"                                     │
-│   - "上海会下雨吗?"                                          │
-│   - "深圳和广州哪里更热?"                                    │
-│                                                             │
-│   系统行为:                                                  │
-│   1. AI 理解用户意图,提取城市名称                             │
-│   2. AI 决定调用 getWeather 函数                             │
-│   3. 系统执行真实的天气查询                                   │
-│   4. AI 将结果用自然语言返回给用户                            │
-│                                                             │
-│   特性:                                                      │
-│   ✓ 支持多个城市查询                                         │
-│   ✓ 支持中文和英文城市名                                      │
-│   ✓ 返回温度、天气状况、湿度等信息                            │
-│   ✓ 友好的对话式交互                                         │
+│   1. 用户请求                                                │
+│      POST /api/chat                                         │
+│      {                                                      │
+│        messages: [{ role: "user", content: "北京天气?" }],  │
+│        functions: [getWeatherSchema]                       │
+│      }                                                      │
+│      ↓                                                      │
+│   2. ChatController.chat()                                  │
+│      - validateChatRequest() [Joi 验证]                    │
+│      - 调用 aiService.chat()                                │
+│      ↓                                                      │
+│   3. AIService.chat()                                       │
+│      - 获取 provider (deepseek/openai)                      │
+│      - factory.get(provider)                               │
+│      - adapter.chat(messages, { functions })               │
+│      ↓                                                      │
+│   4. DeepSeekAdapter.chat()                                 │
+│      - 格式化 messages                                       │
+│      - 调用 DeepSeek API                                     │
+│      - 格式化响应                                            │
+│      ↓                                                      │
+│   5. AI 返回 function_call                                  │
+│      {                                                      │
+│        function_call: {                                    │
+│          name: "getWeather",                               │
+│          arguments: '{"city":"北京"}'                       │
+│        }                                                   │
+│      }                                                      │
+│      ↓                                                      │
+│   6. ChatController 解析并执行                               │
+│      - functionExecutor.execute("getWeather", args)        │
+│      - [Zod 验证参数]                                        │
+│      - 执行函数 → 返回天气数据                               │
+│      ↓                                                      │
+│   7. 添加 function 消息,再次调用 AI                          │
+│      messages.push({                                       │
+│        role: "function",                                   │
+│        name: "getWeather",                                 │
+│        content: JSON.stringify(weatherData)                │
+│      })                                                    │
+│      ↓                                                      │
+│   8. AI 生成最终回复                                         │
+│      "北京今天天气晴朗,温度15°C,适合外出..."                 │
+│      ↓                                                      │
+│   9. 返回给用户                                              │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
 ```
-
-### 1.2 技术栈
-
-- **AI SDK**: OpenAI SDK (兼容 DeepSeek)
-- **验证库**: Zod
-- **天气 API**: 模拟数据 (可替换为真实 API)
-- **运行时**: Node.js
 
 ---
 
 ## 二、实现天气查询函数
 
-### 2.1 模拟天气数据
+### 2.1 创建函数实现 (带 Zod 验证)
 
-创建 `functions/getWeather.js`:
+**文件路径**: `/Users/jianglin/Desktop/backend/AI-backend/functions/getWeather.js`
 
 ```javascript
 import { z } from 'zod'
 
-// 模拟天气数据库
+// ========== 模拟天气数据库 ==========
 const weatherDatabase = {
   北京: {
     city: '北京',
@@ -70,6 +128,7 @@ const weatherDatabase = {
     humidity: 45,
     windSpeed: 12,
     aqi: 85,
+    updateTime: '2024-01-27 14:00:00',
   },
   上海: {
     city: '上海',
@@ -78,6 +137,7 @@ const weatherDatabase = {
     humidity: 65,
     windSpeed: 8,
     aqi: 65,
+    updateTime: '2024-01-27 14:00:00',
   },
   深圳: {
     city: '深圳',
@@ -86,6 +146,7 @@ const weatherDatabase = {
     humidity: 80,
     windSpeed: 15,
     aqi: 45,
+    updateTime: '2024-01-27 14:00:00',
   },
   广州: {
     city: '广州',
@@ -94,6 +155,7 @@ const weatherDatabase = {
     humidity: 75,
     windSpeed: 10,
     aqi: 55,
+    updateTime: '2024-01-27 14:00:00',
   },
   杭州: {
     city: '杭州',
@@ -102,32 +164,46 @@ const weatherDatabase = {
     humidity: 55,
     windSpeed: 6,
     aqi: 70,
+    updateTime: '2024-01-27 14:00:00',
   },
 }
 
-// 城市名称映射 (支持英文)
+// 城市名称映射 (支持多种表达方式)
 const cityNameMap = {
+  // 英文
   beijing: '北京',
   shanghai: '上海',
   shenzhen: '深圳',
   guangzhou: '广州',
   hangzhou: '杭州',
+  // 别名
+  帝都: '北京',
+  魔都: '上海',
+  鹏城: '深圳',
 }
 
-// 定义参数 Schema
+// ========== Zod Schema 定义 ==========
+
+// 参数 Schema
 export const GetWeatherParamsSchema = z.object({
-  city: z.string().describe('城市名称,例如: 北京、上海、深圳'),
+  city: z.string()
+    .min(1, '城市名称不能为空')
+    .max(20, '城市名称过长')
+    .describe('城市名称,例如: 北京、上海、深圳'),
 })
 
-// 定义返回值 Schema
+// 返回值 Schema
 export const GetWeatherResultSchema = z.object({
   city: z.string(),
   temperature: z.number(),
   weather: z.string(),
-  humidity: z.number(),
-  windSpeed: z.number(),
-  aqi: z.number(),
+  humidity: z.number().min(0).max(100),
+  windSpeed: z.number().min(0),
+  aqi: z.number().min(0).max(500),
+  updateTime: z.string(),
 })
+
+// ========== 函数实现 ==========
 
 /**
  * 获取指定城市的天气信息
@@ -135,93 +211,284 @@ export const GetWeatherResultSchema = z.object({
  * @returns {Object} 天气信息
  */
 export function getWeather(params) {
-  // 验证参数
+  // 1. Zod 验证参数
   const { city } = GetWeatherParamsSchema.parse(params)
 
-  // 标准化城市名称
+  // 2. 标准化城市名称
   const normalizedCity = cityNameMap[city.toLowerCase()] || city
 
-  // 查询天气数据
+  // 3. 查询天气数据
   const weatherData = weatherDatabase[normalizedCity]
 
   if (!weatherData) {
-    throw new Error(`暂不支持查询 ${city} 的天气信息`)
+    const supportedCities = Object.keys(weatherDatabase).join('、')
+    throw new Error(
+      `暂不支持查询 ${city} 的天气信息。` +
+      `目前支持的城市: ${supportedCities}`
+    )
   }
 
-  // 验证返回值
+  // 4. 验证返回值
   return GetWeatherResultSchema.parse(weatherData)
 }
 
-// 测试
+// ========== 自测试 ==========
 if (import.meta.url === `file://${process.argv[1]}`) {
+  console.log('=== 测试 getWeather 函数 ===\n')
+
   console.log('测试 1: 查询北京天气')
   console.log(getWeather({ city: '北京' }))
 
   console.log('\n测试 2: 查询上海天气 (英文)')
   console.log(getWeather({ city: 'shanghai' }))
 
-  console.log('\n测试 3: 查询不支持的城市')
+  console.log('\n测试 3: 查询深圳天气 (别名)')
+  console.log(getWeather({ city: '鹏城' }))
+
+  console.log('\n测试 4: 查询不支持的城市')
   try {
     getWeather({ city: '火星' })
   } catch (error) {
-    console.log('错误:', error.message)
+    console.log('错误捕获:', error.message)
+  }
+
+  console.log('\n测试 5: 空城市名')
+  try {
+    getWeather({ city: '' })
+  } catch (error) {
+    console.log('错误捕获:', error.issues[0].message)
   }
 }
 ```
 
-### 2.2 生成 Function Schema
+### 2.2 创建 Function Schema
 
-创建 `schemas/getWeather.schema.js`:
+**文件路径**: `/Users/jianglin/Desktop/backend/AI-backend/schemas/getWeather.schema.js`
 
 ```javascript
+export const getWeatherSchema = {
+  name: 'getWeather',
+  description: '获取指定城市的实时天气信息,包括温度、天气状况、湿度、风速和空气质量指数(AQI)。支持的城市:北京、上海、深圳、广州、杭州。',
+  parameters: {
+    type: 'object',
+    properties: {
+      city: {
+        type: 'string',
+        description: '城市名称,支持中文(如"北京")、英文(如"beijing")和别名(如"帝都")',
+        examples: ['北京', '上海', '深圳', 'beijing', 'shanghai'],
+      },
+    },
+    required: ['city'],
+  },
+}
+
+// 也可以从 Zod Schema 自动生成
 import { GetWeatherParamsSchema } from '../functions/getWeather.js'
-import { zodToFunctionSchema } from '../utils/zodToFunctionSchema.js'
 
-export const getWeatherSchema = zodToFunctionSchema(
-  'getWeather',
-  '获取指定城市的实时天气信息,包括温度、天气状况、湿度、风速和空气质量指数(AQI)。支持的城市:北京、上海、深圳、广州、杭州。',
-  GetWeatherParamsSchema
-)
-
-// 验证生成的 Schema
-console.log(JSON.stringify(getWeatherSchema, null, 2))
+// 如果使用 zodToFunctionSchema (见 Step 33)
+// export const getWeatherSchema = zodToFunctionSchema(
+//   'getWeather',
+//   '获取指定城市的实时天气信息...',
+//   GetWeatherParamsSchema
+// )
 ```
 
 ---
 
-## 三、实现完整的聊天流程
+## 三、注册函数到执行器
 
-### 3.1 创建聊天助手
+### 3.1 更新函数注册配置
 
-创建 `weatherChat.js`:
+**文件路径**: `/Users/jianglin/Desktop/backend/AI-backend/src/config/functions.js`
+
+```javascript
+import functionExecutor from '../utils/functionExecutor.js'
+import { getTime } from '../../functions/getTime.js'
+import { sum } from '../../functions/sum.js'
+import { getWeather } from '../../functions/getWeather.js'  // ← 新增
+
+/**
+ * 初始化函数执行器
+ * 注册所有可用函数
+ */
+export function initFunctions() {
+  // 注册现有函数
+  functionExecutor.register('getTime', (args) => {
+    return getTime(args.timezone)
+  })
+
+  functionExecutor.register('sum', (args) => {
+    return sum(args.a, args.b)
+  })
+
+  // 注册天气查询函数
+  functionExecutor.register('getWeather', (args) => {
+    return getWeather(args)  // ← 新增
+  })
+
+  console.log(`✓ Registered functions: ${functionExecutor.list().join(', ')}`)
+}
+```
+
+### 3.2 在应用启动时初始化
+
+**文件路径**: `/Users/jianglin/Desktop/backend/AI-backend/server.js`
+
+```javascript
+import app from './src/app.js'
+import config from './src/config/index.js'
+import logger from './src/utils/logger.js'
+import { initFunctions } from './src/config/functions.js'  // ← 确保导入
+
+const PORT = config.port
+
+// 初始化函数执行器
+initFunctions()  // ← 确保调用
+
+const server = app.listen(PORT, () => {
+  logger.info(`Server is running on http://localhost:${PORT}`)
+  logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`)
+  console.log(`🚀 Server ready at http://localhost:${PORT}`)
+})
+
+process.on('SIGABRT', () => {
+  logger.info('SIGABRT signal received: closing HTTP server')
+  server.close(() => {
+    logger.info('HTTP server closed')
+  })
+})
+```
+
+---
+
+## 四、测试天气查询
+
+### 4.1 HTTP 测试
+
+创建 `test-weather.http`:
+
+```http
+### 测试 1: 查询单个城市天气
+POST http://localhost:3000/api/chat
+Content-Type: application/json
+
+{
+  "messages": [
+    { "role": "user", "content": "北京今天天气怎么样?" }
+  ],
+  "provider": "deepseek",
+  "functions": [
+    {
+      "name": "getWeather",
+      "description": "获取指定城市的实时天气信息",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "city": {
+            "type": "string",
+            "description": "城市名称"
+          }
+        },
+        "required": ["city"]
+      }
+    }
+  ]
+}
+
+### 测试 2: 比较多个城市天气
+POST http://localhost:3000/api/chat
+Content-Type: application/json
+
+{
+  "messages": [
+    { "role": "user", "content": "上海和深圳哪里更热?" }
+  ],
+  "provider": "deepseek",
+  "functions": [
+    {
+      "name": "getWeather",
+      "description": "获取指定城市的实时天气信息",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "city": { "type": "string" }
+        },
+        "required": ["city"]
+      }
+    }
+  ]
+}
+
+### 测试 3: 不支持的城市
+POST http://localhost:3000/api/chat
+Content-Type: application/json
+
+{
+  "messages": [
+    { "role": "user", "content": "火星的天气如何?" }
+  ],
+  "functions": [
+    {
+      "name": "getWeather",
+      "description": "获取指定城市的实时天气信息",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "city": { "type": "string" }
+        },
+        "required": ["city"]
+      }
+    }
+  ]
+}
+```
+
+### 4.2 预期响应
+
+**测试 1 的完整流程**:
+
+```json
+// 1. AI 返回 function_call
+{
+  "status": "success",
+  "data": {
+    "content": "北京今天天气晴朗,温度为 15°C,湿度 45%,风速 12 km/h,空气质量指数为 85(良好)。是个适合外出的好天气!"
+  }
+}
+
+// 日志输出 (logger 记录)
+[2024-01-27 14:30:00] INFO: Chat request validated
+[2024-01-27 14:30:01] INFO: AI requested function call { name: 'getWeather', args: '{"city":"北京"}' }
+[2024-01-27 14:30:01] INFO: Function getWeather executed successfully
+[2024-01-27 14:30:02] INFO: Final response generated
+```
+
+---
+
+## 五、构建交互式命令行工具 (可选)
+
+### 5.1 创建 CLI 工具
+
+**文件路径**: `/Users/jianglin/Desktop/backend/AI-backend/cli-weather-chat.js`
 
 ```javascript
 import OpenAI from 'openai'
-import { getWeather, GetWeatherParamsSchema, GetWeatherResultSchema } from './functions/getWeather.js'
-import { getWeatherSchema } from './schemas/getWeather.schema.js'
-import { ZodFunctionExecutor } from './utils/functionExecutor.zod.js'
 import readline from 'readline'
+import config from './src/config/index.js'
+import { getWeather } from './functions/getWeather.js'
+import { getWeatherSchema } from './schemas/getWeather.schema.js'
 
 // 初始化 OpenAI 客户端
 const client = new OpenAI({
-  apiKey: process.env.DEEPSEEK_API_KEY,
-  baseURL: process.env.DEEPSEEK_BASEURL,
-})
-
-// 创建函数执行器
-const executor = new ZodFunctionExecutor({
-  getWeather: {
-    fn: getWeather,
-    paramsSchema: GetWeatherParamsSchema,
-    resultSchema: GetWeatherResultSchema,
-  },
+  apiKey: config.ai.deepseek.apiKey,
+  baseURL: config.ai.deepseek.baseURL,
 })
 
 // 消息历史
 const messages = [
   {
     role: 'system',
-    content: '你是一个友好的天气助手,可以帮用户查询天气信息。当用户询问天气时,调用 getWeather 函数获取数据,然后用自然语言回复。',
+    content: '你是一个友好的天气助手,可以帮用户查询天气信息。当用户询问天气时,调用 getWeather 函数获取数据,然后用自然语言回复。提供天气建议(如是否需要带伞、防晒等)。',
   },
 ]
 
@@ -237,58 +504,78 @@ async function chat(userMessage) {
 
   console.log(`\n用户: ${userMessage}`)
 
-  // 调用 AI
-  const response = await client.chat.completions.create({
-    model: 'deepseek-chat',
-    messages: messages,
-    functions: [getWeatherSchema],
-  })
+  try {
+    // 第一次调用 AI
+    const response = await client.chat.completions.create({
+      model: config.ai.deepseek.model,
+      messages: messages,
+      functions: [getWeatherSchema],
+    })
 
-  const assistantMessage = response.choices[0].message
+    const assistantMessage = response.choices[0].message
 
-  // 判断是否需要调用函数
-  if (assistantMessage.function_call) {
-    const { name, arguments: args } = assistantMessage.function_call
+    // 判断是否需要调用函数
+    if (assistantMessage.function_call) {
+      const { name, arguments: args } = assistantMessage.function_call
 
-    console.log(`\n→ AI 决定调用函数: ${name}`)
-    console.log(`→ 参数: ${args}`)
+      console.log(`\n→ AI 决定调用函数: ${name}`)
+      console.log(`→ 参数: ${args}`)
 
-    try {
-      // 执行函数
-      const result = executor.execute(name, args)
-      console.log(`→ 执行结果:`, result)
+      try {
+        // 执行函数
+        const params = JSON.parse(args)
+        const result = getWeather(params)
+        console.log(`→ 执行结果:`, result)
 
-      // 添加 AI 的函数调用消息
+        // 添加 AI 的函数调用消息
+        messages.push(assistantMessage)
+
+        // 添加函数执行结果
+        messages.push({
+          role: 'function',
+          name: name,
+          content: JSON.stringify(result, null, 2),
+        })
+
+        // 再次调用 AI,获取最终回复
+        const finalResponse = await client.chat.completions.create({
+          model: config.ai.deepseek.model,
+          messages: messages,
+        })
+
+        const finalMessage = finalResponse.choices[0].message
+        messages.push(finalMessage)
+
+        console.log(`\nAI: ${finalMessage.content}`)
+      } catch (error) {
+        console.log(`\n✗ 函数执行失败: ${error.message}`)
+
+        // 告诉 AI 函数执行失败
+        messages.push(assistantMessage)
+        messages.push({
+          role: 'function',
+          name: name,
+          content: JSON.stringify({ error: error.message }),
+        })
+
+        // 让 AI 生成错误回复
+        const errorResponse = await client.chat.completions.create({
+          model: config.ai.deepseek.model,
+          messages: messages,
+        })
+
+        const errorMessage = errorResponse.choices[0].message
+        messages.push(errorMessage)
+
+        console.log(`\nAI: ${errorMessage.content}`)
+      }
+    } else {
+      // 直接回复,不需要调用函数
       messages.push(assistantMessage)
-
-      // 添加函数执行结果
-      messages.push({
-        role: 'function',
-        name: name,
-        content: JSON.stringify(result, null, 2),
-      })
-
-      // 再次调用 AI,获取最终回复
-      const finalResponse = await client.chat.completions.create({
-        model: 'deepseek-chat',
-        messages: messages,
-      })
-
-      const finalMessage = finalResponse.choices[0].message
-      messages.push(finalMessage)
-
-      console.log(`\nAI: ${finalMessage.content}`)
-    } catch (error) {
-      console.log(`\n✗ 函数执行失败: ${error.message}`)
-      messages.push({
-        role: 'assistant',
-        content: `抱歉,查询天气时出现错误: ${error.message}`,
-      })
+      console.log(`\nAI: ${assistantMessage.content}`)
     }
-  } else {
-    // 直接回复,不需要调用函数
-    messages.push(assistantMessage)
-    console.log(`\nAI: ${assistantMessage.content}`)
+  } catch (error) {
+    console.log(`\n✗ 错误: ${error.message}`)
   }
 }
 
@@ -297,7 +584,7 @@ async function chat(userMessage) {
  */
 async function startChat() {
   console.log('╔════════════════════════════════════════════════╗')
-  console.log('║       欢迎使用天气查询助手 (输入 exit 退出)        ║')
+  console.log('║   AI-backend 天气查询助手 (输入 exit 退出)      ║')
   console.log('╚════════════════════════════════════════════════╝')
 
   const rl = readline.createInterface({
@@ -320,12 +607,7 @@ async function startChat() {
         return
       }
 
-      try {
-        await chat(userInput)
-      } catch (error) {
-        console.log(`\n✗ 错误: ${error.message}`)
-      }
-
+      await chat(userInput)
       askQuestion()
     })
   }
@@ -337,17 +619,21 @@ async function startChat() {
 startChat()
 ```
 
-### 3.2 运行测试
+### 5.2 运行 CLI 工具
 
 ```bash
-node weatherChat.js
+# 进入 AI-backend 项目
+cd /Users/jianglin/Desktop/backend/AI-backend
+
+# 运行 CLI 工具
+node cli-weather-chat.js
 ```
 
-预期交互:
+**预期交互**:
 
 ```
 ╔════════════════════════════════════════════════╗
-║       欢迎使用天气查询助手 (输入 exit 退出)        ║
+║   AI-backend 天气查询助手 (输入 exit 退出)      ║
 ╚════════════════════════════════════════════════╝
 
 你: 北京今天天气怎么样?
@@ -356,18 +642,17 @@ node weatherChat.js
 
 → AI 决定调用函数: getWeather
 → 参数: {"city":"北京"}
-✓ 参数验证通过: { city: '北京' }
-✓ 函数执行成功: {
+→ 执行结果: {
   city: '北京',
   temperature: 15,
   weather: '晴天',
   humidity: 45,
   windSpeed: 12,
-  aqi: 85
+  aqi: 85,
+  updateTime: '2024-01-27 14:00:00'
 }
-✓ 返回值验证通过
 
-AI: 北京今天天气晴朗,温度为 15°C,湿度 45%,风速 12 km/h,空气质量指数为 85,属于良好水平。是个适合外出的好天气!
+AI: 北京今天天气晴朗,温度为 15°C,湿度 45%,风速 12 km/h,空气质量指数为 85,属于良好水平。是个适合外出的好天气!建议做好防晒措施。
 
 你: 上海和深圳哪里更热?
 
@@ -375,161 +660,81 @@ AI: 北京今天天气晴朗,温度为 15°C,湿度 45%,风速 12 km/h,空气质
 
 → AI 决定调用函数: getWeather
 → 参数: {"city":"上海"}
-✓ 参数验证通过: { city: '上海' }
-✓ 函数执行成功: { city: '上海', temperature: 20, ... }
+→ 执行结果: { city: '上海', temperature: 20, ... }
 
 → AI 决定调用函数: getWeather
 → 参数: {"city":"深圳"}
-✓ 参数验证通过: { city: '深圳' }
-✓ 函数执行成功: { city: '深圳', temperature: 28, ... }
+→ 执行结果: { city: '深圳', temperature: 28, ... }
 
-AI: 深圳比上海更热。深圳目前温度为 28°C,而上海为 20°C。深圳的湿度也更高,达到 80%,体感可能会更闷热一些。
+AI: 深圳比上海更热。深圳目前温度为 28°C,而上海为 20°C。深圳的湿度也更高,达到 80%,体感可能会更闷热一些。如果去深圳,建议穿轻薄透气的衣物并多补充水分。
 ```
 
 ---
 
-## 四、增强功能
+## 六、增强功能 (可选)
 
-### 4.1 添加更多函数:获取天气趋势
-
-创建 `functions/getWeatherTrend.js`:
+### 6.1 添加天气建议功能
 
 ```javascript
+// functions/getWeatherAdvice.js
 import { z } from 'zod'
 
-export const GetWeatherTrendParamsSchema = z.object({
-  city: z.string().describe('城市名称'),
-  days: z.number().int().min(1).max(7).default(3).describe('未来天数,1-7 天'),
+const GetWeatherAdviceParamsSchema = z.object({
+  temperature: z.number(),
+  weather: z.string(),
+  aqi: z.number(),
 })
 
-export const GetWeatherTrendResultSchema = z.array(
-  z.object({
-    date: z.string(),
-    temperature: z.number(),
-    weather: z.string(),
-  })
-)
+export function getWeatherAdvice(params) {
+  const { temperature, weather, aqi } = GetWeatherAdviceParamsSchema.parse(params)
 
-export function getWeatherTrend(params) {
-  const { city, days } = GetWeatherTrendParamsSchema.parse(params)
+  const advice = []
 
-  // 模拟未来几天的天气趋势
-  const trend = []
-  const baseTemp = Math.floor(Math.random() * 10) + 15
-
-  for (let i = 0; i < days; i++) {
-    const date = new Date()
-    date.setDate(date.getDate() + i)
-
-    trend.push({
-      date: date.toISOString().split('T')[0],
-      temperature: baseTemp + Math.floor(Math.random() * 5) - 2,
-      weather: ['晴天', '多云', '阴天', '小雨'][Math.floor(Math.random() * 4)],
-    })
+  // 温度建议
+  if (temperature < 5) {
+    advice.push('气温较低,注意保暖,建议穿羽绒服')
+  } else if (temperature > 30) {
+    advice.push('天气炎热,注意防暑,多喝水,避免长时间户外活动')
   }
 
-  return GetWeatherTrendResultSchema.parse(trend)
+  // 天气建议
+  if (weather.includes('雨')) {
+    advice.push('有降雨,记得带伞')
+  } else if (weather === '晴天') {
+    advice.push('天气晴朗,适合外出,但要注意防晒')
+  }
+
+  // 空气质量建议
+  if (aqi > 150) {
+    advice.push('空气质量较差,建议减少户外活动,外出时戴口罩')
+  } else if (aqi > 100) {
+    advice.push('空气质量一般,敏感人群注意防护')
+  }
+
+  return advice.length > 0 ? advice : ['天气不错,适合外出活动']
 }
 ```
 
-### 4.2 支持流式响应
-
-创建 `weatherChatStream.js`:
+### 6.2 对接真实天气 API
 
 ```javascript
-import OpenAI from 'openai'
-import { getWeather } from './functions/getWeather.js'
-import { getWeatherSchema } from './schemas/getWeather.schema.js'
-
-const client = new OpenAI({
-  apiKey: process.env.DEEPSEEK_API_KEY,
-  baseURL: process.env.DEEPSEEK_BASEURL,
-})
-
-async function chatStream(userMessage) {
-  const messages = [
-    { role: 'system', content: '你是天气助手' },
-    { role: 'user', content: userMessage },
-  ]
-
-  console.log(`\n用户: ${userMessage}\n`)
-
-  // 第一次调用:检测是否需要调用函数
-  const response = await client.chat.completions.create({
-    model: 'deepseek-chat',
-    messages: messages,
-    functions: [getWeatherSchema],
-  })
-
-  const assistantMessage = response.choices[0].message
-
-  if (assistantMessage.function_call) {
-    const { name, arguments: args } = assistantMessage.function_call
-    const params = JSON.parse(args)
-
-    console.log(`→ 调用函数: ${name}(${JSON.stringify(params)})`)
-
-    // 执行函数
-    const result = getWeather(params)
-    console.log(`→ 结果:`, result)
-
-    // 添加函数结果到消息历史
-    messages.push(assistantMessage)
-    messages.push({
-      role: 'function',
-      name: name,
-      content: JSON.stringify(result),
-    })
-
-    // 第二次调用:流式生成最终回复
-    console.log('\nAI: ')
-
-    const stream = await client.chat.completions.create({
-      model: 'deepseek-chat',
-      messages: messages,
-      stream: true,
-    })
-
-    for await (const chunk of stream) {
-      const content = chunk.choices[0]?.delta?.content
-      if (content) {
-        process.stdout.write(content)
-      }
-    }
-
-    console.log('\n')
-  } else {
-    console.log(`\nAI: ${assistantMessage.content}\n`)
-  }
-}
-
-// 测试
-chatStream('北京今天天气怎么样?')
-```
-
----
-
-## 五、对接真实天气 API (可选)
-
-### 5.1 使用免费天气 API
-
-以和风天气为例:
-
-```javascript
+// functions/getWeather.real.js
 import fetch from 'node-fetch'
 
 /**
- * 调用真实天气 API
+ * 调用真实天气 API (和风天气示例)
  */
-async function getRealWeather(city) {
+async function getWeatherFromAPI(city) {
   const apiKey = process.env.WEATHER_API_KEY
   const baseUrl = 'https://devapi.qweather.com/v7/weather/now'
 
-  // 1. 先查询城市 ID (简化处理,实际需要调用 GeoAPI)
+  // 1. 城市 ID 映射 (简化处理)
   const cityIdMap = {
     北京: '101010100',
     上海: '101020100',
     深圳: '101280601',
+    广州: '101280101',
+    杭州: '101210101',
   }
 
   const locationId = cityIdMap[city]
@@ -554,129 +759,173 @@ async function getRealWeather(city) {
     humidity: parseInt(data.now.humidity),
     windSpeed: parseInt(data.now.windSpeed),
     aqi: 0,  // 需要单独调用 Air API
+    updateTime: data.updateTime,
   }
 }
 ```
 
 ---
 
-## 六、学习检查清单
+## 七、完整的架构总结
 
-完成以下所有项目,说明你已掌握本节内容:
+### 7.1 AI-backend 的优势
 
-### 第一层:基础功能
+```
+┌─────────────────────────────────────────────────────────────┐
+│     为什么 AI-backend 适合构建 Function Calling 应用?           │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│   1. 清晰的职责分离                                          │
+│      Controller → Service → Adapter → Executor → Function  │
+│      每一层都有明确的职责,易于维护和扩展                      │
+│                                                             │
+│   2. 统一的错误处理                                          │
+│      ApiError 体系 → 统一的 HTTP 状态码                     │
+│      函数执行错误 → BadRequestError                          │
+│      AI 服务错误 → AIServiceError                           │
+│                                                             │
+│   3. 完整的日志记录                                          │
+│      Winston + DailyRotate → 每个环节都有日志               │
+│      便于调试和问题定位                                       │
+│                                                             │
+│   4. 多 Provider 支持                                       │
+│      Adapter Pattern → 轻松切换 AI 提供商                   │
+│      Factory Pattern → 动态注册新 Provider                  │
+│                                                             │
+│   5. 多层验证防御                                            │
+│      Layer 1 (Joi) → HTTP 请求验证                          │
+│      Layer 2 → JSON 解析和业务验证                           │
+│      Layer 3 (Zod) → 函数参数验证                           │
+│                                                             │
+│   6. 易于扩展                                                │
+│      添加新函数: 只需 3 步                                   │
+│      - 实现函数 (functions/newFunc.js)                      │
+│      - 定义 Schema (schemas/newFunc.schema.js)             │
+│      - 注册到 Executor (config/functions.js)               │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
 
-- [ ] 实现了天气查询函数
-- [ ] 定义了完整的 Function Schema
-- [ ] 集成了 Zod 验证
-- [ ] 能够正确执行函数调用
+### 7.2 关键设计模式总结
 
-### 第二层:交互体验
+| 设计模式 | 应用位置 | 作用 |
+|---------|---------|------|
+| **Adapter Pattern** | src/adapters/ | 统一不同 AI Provider 的接口 |
+| **Factory Pattern** | src/services/adapterFactory.js | 动态创建 Adapter 实例 |
+| **Singleton Pattern** | functionExecutor, logger | 全局唯一实例 |
+| **Middleware Pattern** | src/middlewares/ | 请求处理管道 |
+| **Strategy Pattern** | functions/ | 不同函数实现不同策略 |
 
-- [ ] 实现了多轮对话
-- [ ] 支持上下文记忆
-- [ ] 提供了友好的交互界面
-- [ ] 处理了各种错误情况
+---
+
+## 八、学习检查清单
+
+### 第一层:功能实现
+
+- [ ] 实现了完整的 getWeather 函数
+- [ ] 创建了对应的 Function Schema
+- [ ] 注册到了 FunctionExecutor
+- [ ] 测试了基本功能
+
+### 第二层:架构理解
+
+- [ ] 理解 AI-backend 的完整请求流程
+- [ ] 知道每一层的职责
+- [ ] 理解错误处理机制
+- [ ] 掌握日志记录的作用
 
 ### 第三层:扩展能力
 
-- [ ] 支持多个城市查询
-- [ ] 实现了流式响应 (可选)
-- [ ] 添加了更多天气相关函数 (可选)
-- [ ] 对接了真实 API (可选)
+- [ ] 能够添加新的函数
+- [ ] 能够实现多轮对话
+- [ ] 能够处理复杂场景
+- [ ] 理解如何对接真实 API
 
 ---
 
-## 七、实践作业
+## 九、实践作业
 
-### 作业 1: 添加天气预警功能
+### 作业 1: 添加历史天气查询
 
-实现一个 `getWeatherAlert` 函数:
+实现 `getHistoricalWeather` 函数:
+- 参数: `city` (城市), `date` (日期)
+- 返回: 指定日期的天气信息
+- 集成到 AI-backend
 
-- 参数: `city` (城市名称)
-- 返回: 当前的天气预警信息 (如台风、暴雨等)
-- 集成到聊天流程中
+### 作业 2: 实现天气预警系统
 
-### 作业 2: 支持语音播报
+实现 `getWeatherAlert` 函数:
+- 参数: `city` (城市)
+- 返回: 当前的天气预警信息(台风、暴雨等)
+- 需要适当的错误处理
 
-实现一个 `speakWeather` 函数:
+### 作业 3: 添加多城市对比
 
-- 参数: 天气信息对象
-- 功能: 将天气信息转换为语音播报文本
-- 提示: 使用更口语化的表达
-
-### 作业 3: 添加天气建议
-
-根据天气情况给出建议:
-
-- 下雨 → 建议带伞
-- 高温 → 建议防晒
-- AQI 高 → 建议戴口罩
+增强 `getWeather` 函数:
+- 支持一次查询多个城市
+- 返回对比结果
+- 提供建议
 
 ---
 
-## 八、常见问题
+## 十、常见问题
 
-### Q1: 如何支持更多城市?
+### Q1: 如何处理 AI 多次调用同一个函数?
 
-**答**: 扩展 `weatherDatabase` 或对接真实 API:
+**答**: AI-backend 的多轮对话机制已支持:
 
 ```javascript
-// 方案 1: 扩展模拟数据
-const weatherDatabase = {
-  // ... 添加更多城市
-}
-
-// 方案 2: 对接真实 API
-async function getWeather(params) {
-  return await getRealWeather(params.city)
+// Controller 中的 while 循环可以处理多次函数调用
+while (result.function_call) {
+  // 执行函数
+  // 添加到 messages
+  // 再次调用 AI
+  result = await aiService.chat(messages, options)
 }
 ```
 
-### Q2: 如何处理 AI 提取错误的城市名?
+### Q2: 如何限制函数调用次数防止死循环?
 
-**答**: 在函数中添加容错处理:
+**答**: 添加计数器:
 
 ```javascript
-function getWeather(params) {
-  let city = params.city
+let functionCallCount = 0
+const MAX_FUNCTION_CALLS = 5
 
-  // 城市名修正
-  const corrections = {
-    '帝都': '北京',
-    '魔都': '上海',
-    '鹏城': '深圳',
-  }
+while (result.function_call && functionCallCount < MAX_FUNCTION_CALLS) {
+  functionCallCount++
+  // ... 执行函数
+}
 
-  city = corrections[city] || city
-
-  // 继续查询...
+if (functionCallCount >= MAX_FUNCTION_CALLS) {
+  logger.warn('Function call limit reached')
+  throw new Error('函数调用次数过多')
 }
 ```
 
-### Q3: 可以一次查询多个城市吗?
+### Q3: 如何处理函数执行超时?
 
-**答**: 可以,修改 Schema 支持数组:
+**答**: 使用 Promise.race:
 
 ```javascript
-const GetWeatherParamsSchema = z.object({
-  cities: z.array(z.string()).describe('城市列表'),
-})
+const timeout = (ms) => new Promise((_, reject) =>
+  setTimeout(() => reject(new Error('Function execution timeout')), ms)
+)
 
-function getWeather(params) {
-  const results = params.cities.map(city => queryWeather(city))
-  return results
-}
+const result = await Promise.race([
+  functionExecutor.execute(name, args),
+  timeout(5000)  // 5 秒超时
+])
 ```
 
 ---
 
-## 九、下一步学习方向
+## 十一、下一步
 
 完成本节后,你已经构建了完整的 Function Calling 应用。接下来:
 
-1. **Step 35**: 整理文档,总结最佳实践
+1. **Step 35**: 总结企业级最佳实践,整理完整的开发规范
 
 ---
 
-**记住: 真实项目的关键是细节处理,错误处理、用户体验、边界情况都需要考虑周全。**
+**记住: 真实项目的关键是细节处理。AI-backend 提供了完整的企业级架构,让你专注于业务逻辑,而不是重复造轮子。**

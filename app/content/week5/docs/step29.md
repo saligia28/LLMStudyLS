@@ -2,14 +2,16 @@
 
 ## 学习目标
 
-这个任务的本质是回答一个核心问题：**什么是 Function Calling，以及如何定义一个 Function Schema**。
+这个任务的本质是回答一个核心问题:**什么是 Function Calling,以及如何在真实项目中应用 Function Schema**。
 
 通过本教程,你将:
 
 1. 理解 Function Calling 的核心概念和应用场景
 2. 掌握 Function Schema 的结构和设计原则
-3. 学会编写符合 OpenAI 规范的函数定义
-4. 理解大模型如何"理解"和"调用"函数
+3. 学习企业级 AI 后端服务的架构模式
+4. 通过 AI-backend 项目理解 Function Calling 的实战应用
+
+> **实战项目**: 本教程将结合 `/Users/jianglin/Desktop/backend/AI-backend` 项目,这是一个生产级的 Express.js AI 后端服务,展示了如何在真实场景中实现 Function Calling。
 
 ---
 
@@ -108,9 +110,83 @@
 
 ---
 
-## 二、Function Schema 详解
+## 二、企业级实战:AI-backend 项目架构
 
-### 2.1 什么是 Function Schema?
+在深入 Function Schema 之前,我们先看一个真实的生产级项目如何组织 AI 服务。
+
+### 2.1 AI-backend 项目结构
+
+```
+AI-backend/
+├── functions/                 # 实际可执行的函数
+│   ├── getTime.js            # 获取时间函数
+│   └── sum.js                # 求和函数
+├── schemas/                   # Function Schema 定义
+│   ├── getTime.schema.js
+│   └── sum.schema.js
+├── src/
+│   ├── adapters/             # AI 提供商适配器(核心设计模式)
+│   │   ├── base.adapter.js   # 抽象基类
+│   │   ├── deepseek.adapter.js
+│   │   ├── openai.adapter.js
+│   │   └── factory.js        # 工厂模式注册器
+│   ├── services/
+│   │   └── ai.service.js     # AI 服务编排层
+│   ├── controllers/
+│   │   └── chat.controller.js # 控制器层
+│   ├── validators/
+│   │   └── chatValidator.js  # 参数验证
+│   └── errors/               # 错误处理体系
+└── server.js                 # 入口文件
+```
+
+**架构亮点**:
+- **Adapter Pattern**: 统一不同 AI 提供商的接口
+- **Factory Pattern**: 动态注册和选择 AI 提供商
+- **职责分离**: Schema 定义和函数实现分离
+- **错误处理**: 完整的错误体系和日志记录
+
+### 2.2 Function Calling 在 AI-backend 中的位置
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│              AI-backend 请求流程                               │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│   HTTP Request                                              │
+│       ↓                                                     │
+│   Controller (chat.controller.js)                          │
+│       ↓                                                     │
+│   Validator (chatValidator.js)                             │
+│       ↓                                                     │
+│   Service (ai.service.js)                                  │
+│       ↓                                                     │
+│   Adapter Factory (factory.js)                             │
+│       ↓                                                     │
+│   Provider Adapter (deepseek.adapter.js)                   │
+│       ↓                                                     │
+│   AI Provider API (DeepSeek/OpenAI)                        │
+│       ↓                                                     │
+│   【Function Calling 发生在这里】                            │
+│   AI 返回: {                                                │
+│     function_call: {                                       │
+│       name: "getTime",                                     │
+│       arguments: "{\"timezone\":\"Asia/Shanghai\"}"        │
+│     }                                                      │
+│   }                                                        │
+│       ↓                                                     │
+│   开发者执行函数 (functions/getTime.js)                      │
+│       ↓                                                     │
+│   返回结果给 AI,生成最终回复                                  │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 三、Function Schema 详解
+
+### 3.1 什么是 Function Schema?
 
 Function Schema 是一个 JSON 对象,用来描述函数的:
 - **名称** (name): 函数叫什么
@@ -119,21 +195,27 @@ Function Schema 是一个 JSON 对象,用来描述函数的:
 
 **核心作用**: 让 AI 理解你有哪些函数可以调用,以及如何调用它们。
 
-### 2.2 最简单的 Function Schema 示例
+### 3.2 AI-backend 实战案例: getTime Schema
+
+让我们看 AI-backend 项目中的真实示例:
+
+**文件**: `schemas/getTime.schema.js`
 
 ```javascript
-const weatherFunction = {
-  name: 'getWeather',
-  description: '获取指定城市的天气信息',
+export const getTimeSchema = {
+  name: 'getTime',
+  description: '获取指定时区的当前时间。如果不指定时区,返回北京时间。',
   parameters: {
     type: 'object',
     properties: {
-      city: {
+      timezone: {
         type: 'string',
-        description: '城市名称,例如: 北京、上海、深圳',
+        description: '时区标识符,例如: UTC, Asia/Shanghai, America/New_York',
+        enum: ['UTC', 'Asia/Shanghai', 'America/New_York'],
+        default: 'Asia/Shanghai',
       },
     },
-    required: ['city'],
+    required: [], // timezone 是可选的
   },
 }
 ```
@@ -148,12 +230,13 @@ const weatherFunction = {
 │   name (必填)                                                │
 │   - 函数的唯一标识符                                          │
 │   - 使用驼峰命名法                                           │
-│   - 例: getWeather, sendEmail, calculateSum                │
+│   - 例: getTime, sendEmail, calculateSum                   │
+│   - 必须与实际函数名一致                                      │
 │                                                             │
 │   description (必填)                                         │
 │   - 函数功能的清晰描述                                        │
 │   - 越详细越好,帮助 AI 理解何时调用                           │
-│   - 例: "获取指定城市的实时天气信息,包括温度、天气状况"         │
+│   - 应说明默认行为(如:"如果不指定时区,返回北京时间")           │
 │                                                             │
 │   parameters (必填)                                          │
 │   - 参数定义对象                                             │
@@ -163,28 +246,30 @@ const weatherFunction = {
 │     • properties: {...}  (参数列表)                         │
 │     • required: [...]    (必填参数数组)                      │
 │                                                             │
+│   enum (可选但推荐)                                          │
+│   - 限制参数的可选值                                          │
+│   - 防止 AI 传入无效值                                        │
+│   - 提高调用准确性                                           │
+│                                                             │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 2.3 parameters 参数定义详解
+### 3.3 parameters 参数定义详解
 
 ```javascript
 parameters: {
   type: 'object',          // 固定值,表示参数是一个对象
 
   properties: {            // 定义每个参数
-    city: {                // 参数名
+    timezone: {            // 参数名
       type: 'string',      // 参数类型
-      description: '城市名称',  // 参数描述
-    },
-    unit: {
-      type: 'string',
-      description: '温度单位',
-      enum: ['celsius', 'fahrenheit'],  // 可选值限制
+      description: '时区标识符',  // 参数描述
+      enum: ['UTC', 'Asia/Shanghai', 'America/New_York'],  // 可选值
+      default: 'Asia/Shanghai',  // 默认值提示
     },
   },
 
-  required: ['city'],      // 必填参数列表
+  required: [],            // 必填参数列表(空数组表示都可选)
 }
 ```
 
@@ -218,9 +303,216 @@ parameters: {
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 2.4 复杂参数示例
+### 3.4 AI-backend 实战案例: sum Schema
 
-**示例 1: 包含数组参数**
+**文件**: `schemas/sum.schema.js`
+
+```javascript
+export const sumSchema = {
+  name: 'sum',
+  description: '计算两个数字的和。支持整数和浮点数。',
+  parameters: {
+    type: 'object',
+    properties: {
+      a: {
+        type: 'number',
+        description: '第一个加数',
+      },
+      b: {
+        type: 'number',
+        description: '第二个加数',
+      },
+    },
+    required: ['a', 'b'],  // 两个参数都是必填的
+  },
+}
+```
+
+**对比 getTime 和 sum 的 Schema 设计**:
+
+| 特性 | getTime | sum |
+|------|---------|-----|
+| 参数数量 | 1个(可选) | 2个(必填) |
+| required 数组 | `[]` (空) | `['a', 'b']` |
+| 参数类型 | string | number |
+| 使用 enum | ✓ (限制时区) | ✗ (数字无限制) |
+| 默认值 | 有默认时区 | 无默认值 |
+
+---
+
+## 四、如何在 API 调用中使用 Function Schema
+
+### 4.1 基本调用方式
+
+```javascript
+import OpenAI from 'openai'
+
+const client = new OpenAI({
+  apiKey: process.env.DEEPSEEK_API_KEY,
+  baseURL: process.env.DEEPSEEK_BASEURL,
+})
+
+// 定义函数列表
+const functions = [
+  {
+    name: 'getTime',
+    description: '获取指定时区的当前时间',
+    parameters: {
+      type: 'object',
+      properties: {
+        timezone: {
+          type: 'string',
+          description: '时区标识符',
+          enum: ['UTC', 'Asia/Shanghai', 'America/New_York'],
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'sum',
+    description: '计算两个数字的和',
+    parameters: {
+      type: 'object',
+      properties: {
+        a: { type: 'number', description: '第一个加数' },
+        b: { type: 'number', description: '第二个加数' },
+      },
+      required: ['a', 'b'],
+    },
+  },
+]
+
+// 调用 API
+const response = await client.chat.completions.create({
+  model: 'deepseek-chat',
+  messages: [
+    { role: 'user', content: '现在几点了?' },
+  ],
+  functions: functions,  // 传入函数定义
+})
+
+console.log(response.choices[0].message)
+```
+
+### 4.2 AI 的返回格式
+
+当 AI 决定调用函数时,会返回:
+
+```javascript
+{
+  role: 'assistant',
+  content: null,  // 注意:content 为 null
+  function_call: {
+    name: 'getTime',  // 要调用的函数名
+    arguments: '{"timezone":"Asia/Shanghai"}'  // 参数(JSON 字符串!)
+  }
+}
+```
+
+**关键理解**:
+- `content` 为 `null`,说明 AI 没有直接回复,而是要调用函数
+- `function_call.arguments` 是 **JSON 字符串**,不是对象
+- 需要使用 `JSON.parse()` 解析参数
+
+---
+
+## 五、AI-backend 的 Adapter 模式
+
+AI-backend 项目使用 Adapter 模式统一不同 AI 提供商的接口。
+
+### 5.1 BaseAdapter 抽象类
+
+**文件**: `src/adapters/base.adapter.js`
+
+```javascript
+export class BaseAdapter {
+  /**
+   * 非流式聊天
+   * @param {Array} messages - 消息列表
+   * @param {Object} options - 配置选项
+   * @param {Array} options.functions - 函数定义列表
+   */
+  async chat(messages, options = {}) {
+    throw new Error('chat() must be implemented')
+  }
+
+  /**
+   * 流式聊天
+   * @param {Array} messages - 消息列表
+   * @param {Object} options - 配置选项
+   * @param {Array} options.functions - 函数定义列表
+   */
+  async chatStream(messages, options = {}) {
+    throw new Error('chatStream() must be implemented')
+  }
+
+  /**
+   * 格式化消息
+   */
+  formatMessages(messages) {
+    return messages
+  }
+
+  /**
+   * 格式化响应
+   */
+  formatResponse(response) {
+    return {
+      role: 'assistant',
+      content: response.choices[0].message.content,
+      function_call: response.choices[0].message.function_call,
+    }
+  }
+}
+```
+
+### 5.2 DeepSeek Adapter 实现
+
+**文件**: `src/adapters/deepseek.adapter.js`
+
+```javascript
+import OpenAI from 'openai'
+import { BaseAdapter } from './base.adapter.js'
+
+export class DeepSeekAdapter extends BaseAdapter {
+  constructor(config) {
+    super()
+    this.client = new OpenAI({
+      apiKey: config.apiKey,
+      baseURL: config.baseURL,
+    })
+    this.model = config.model || 'deepseek-chat'
+  }
+
+  async chat(messages, options = {}) {
+    const { functions, ...restOptions } = options
+
+    const response = await this.client.chat.completions.create({
+      model: this.model,
+      messages: this.formatMessages(messages),
+      functions: functions,  // 传入 Function Schema
+      ...restOptions,
+    })
+
+    return this.formatResponse(response)
+  }
+
+  // ... 省略其他方法
+}
+```
+
+**Adapter Pattern 的优势**:
+- 统一接口,切换 AI 提供商只需改配置
+- 封装细节,业务代码不关心具体实现
+- 易于扩展,新增提供商只需实现 BaseAdapter
+- 便于测试,可以 mock Adapter
+
+---
+
+## 六、复杂场景的 Function Schema 模板
+
+### 6.1 包含数组参数的 Schema
 
 ```javascript
 {
@@ -247,7 +539,7 @@ parameters: {
 }
 ```
 
-**示例 2: 包含对象参数**
+### 6.2 包含对象参数的 Schema
 
 ```javascript
 {
@@ -280,7 +572,7 @@ parameters: {
 }
 ```
 
-**示例 3: 包含枚举限制**
+### 6.3 包含枚举限制的 Schema
 
 ```javascript
 {
@@ -296,7 +588,7 @@ parameters: {
       unit: {
         type: 'string',
         description: '温度单位',
-        enum: ['celsius', 'fahrenheit', 'kelvin'],  // 只能是这三个值之一
+        enum: ['celsius', 'fahrenheit', 'kelvin'],  // 限制值
       },
     },
     required: ['value', 'unit'],
@@ -306,54 +598,7 @@ parameters: {
 
 ---
 
-## 三、实践:编写第一个 Function Schema
-
-### 3.1 需求分析
-
-我们要定义一个"发送邮件"的函数:
-
-**功能**: 发送电子邮件
-**需要的参数**:
-- 收件人邮箱 (必填)
-- 邮件主题 (必填)
-- 邮件正文 (必填)
-- 抄送邮箱 (可选)
-
-### 3.2 编写 Schema
-
-```javascript
-const sendEmailFunction = {
-  name: 'sendEmail',
-  description: '发送电子邮件给指定收件人',
-  parameters: {
-    type: 'object',
-    properties: {
-      to: {
-        type: 'string',
-        description: '收件人邮箱地址',
-      },
-      subject: {
-        type: 'string',
-        description: '邮件主题',
-      },
-      body: {
-        type: 'string',
-        description: '邮件正文内容',
-      },
-      cc: {
-        type: 'array',
-        items: {
-          type: 'string',
-        },
-        description: '抄送邮箱地址列表(可选)',
-      },
-    },
-    required: ['to', 'subject', 'body'],
-  },
-}
-```
-
-### 3.3 Schema 设计检查清单
+## 七、Schema 设计检查清单
 
 设计完 Schema 后,检查以下几点:
 
@@ -365,10 +610,12 @@ const sendEmailFunction = {
 │   ✓ name 是否清晰且符合命名规范?                              │
 │     - 使用动词开头(get, send, create, update, delete)       │
 │     - 使用驼峰命名法                                         │
+│     - 与实际函数名保持一致                                    │
 │                                                             │
 │   ✓ description 是否足够详细?                                │
 │     - 说明函数的具体功能                                     │
 │     - 说明何时应该调用这个函数                                │
+│     - 说明默认行为和特殊情况                                  │
 │                                                             │
 │   ✓ 参数类型是否正确?                                        │
 │     - 邮箱、城市名 → string                                 │
@@ -378,169 +625,23 @@ const sendEmailFunction = {
 │   ✓ 参数描述是否清晰?                                        │
 │     - 说明参数的含义                                         │
 │     - 如果有格式要求,要说明                                  │
+│     - 给出示例值                                            │
 │                                                             │
 │   ✓ required 数组是否正确?                                   │
 │     - 列出所有必填参数                                       │
 │     - 可选参数不要放在 required 里                           │
+│     - 有默认值的参数通常是可选的                              │
+│                                                             │
+│   ✓ 是否使用了 enum 限制值?                                  │
+│     - 对于固定选项,使用 enum                                 │
+│     - 防止 AI 传入无效值                                     │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 四、如何在 API 调用中使用 Function Schema
-
-### 4.1 基本调用方式
-
-```javascript
-import OpenAI from 'openai'
-
-const client = new OpenAI({
-  apiKey: process.env.DEEPSEEK_API_KEY,
-  baseURL: process.env.DEEPSEEK_BASEURL,
-})
-
-// 定义函数
-const functions = [
-  {
-    name: 'getWeather',
-    description: '获取指定城市的天气信息',
-    parameters: {
-      type: 'object',
-      properties: {
-        city: {
-          type: 'string',
-          description: '城市名称',
-        },
-      },
-      required: ['city'],
-    },
-  },
-]
-
-// 调用 API
-const response = await client.chat.completions.create({
-  model: 'deepseek-chat',
-  messages: [
-    { role: 'user', content: '北京今天天气怎么样?' },
-  ],
-  functions: functions,  // 传入函数定义
-})
-
-console.log(response.choices[0].message)
-```
-
-### 4.2 AI 的返回格式
-
-当 AI 决定调用函数时,会返回:
-
-```javascript
-{
-  role: 'assistant',
-  content: null,  // 注意:content 为 null
-  function_call: {
-    name: 'getWeather',  // 要调用的函数名
-    arguments: '{"city":"北京"}'  // 参数(JSON 字符串)
-  }
-}
-```
-
-**关键理解**:
-- `content` 为 `null`,说明 AI 没有直接回复,而是要调用函数
-- `function_call.arguments` 是 **JSON 字符串**,不是对象
-- 需要使用 `JSON.parse()` 解析参数
-
----
-
-## 五、常见场景的 Function Schema 模板
-
-### 5.1 查询类函数
-
-```javascript
-{
-  name: 'searchDatabase',
-  description: '在数据库中搜索数据',
-  parameters: {
-    type: 'object',
-    properties: {
-      query: {
-        type: 'string',
-        description: '搜索关键词',
-      },
-      limit: {
-        type: 'integer',
-        description: '最大返回结果数',
-        default: 10,
-      },
-    },
-    required: ['query'],
-  },
-}
-```
-
-### 5.2 创建类函数
-
-```javascript
-{
-  name: 'createTask',
-  description: '创建新任务',
-  parameters: {
-    type: 'object',
-    properties: {
-      title: {
-        type: 'string',
-        description: '任务标题',
-      },
-      description: {
-        type: 'string',
-        description: '任务描述',
-      },
-      priority: {
-        type: 'string',
-        enum: ['low', 'medium', 'high'],
-        description: '优先级',
-      },
-      dueDate: {
-        type: 'string',
-        description: '截止日期,格式: YYYY-MM-DD',
-      },
-    },
-    required: ['title'],
-  },
-}
-```
-
-### 5.3 计算类函数
-
-```javascript
-{
-  name: 'calculate',
-  description: '执行数学计算',
-  parameters: {
-    type: 'object',
-    properties: {
-      operation: {
-        type: 'string',
-        enum: ['add', 'subtract', 'multiply', 'divide'],
-        description: '运算类型',
-      },
-      a: {
-        type: 'number',
-        description: '第一个数',
-      },
-      b: {
-        type: 'number',
-        description: '第二个数',
-      },
-    },
-    required: ['operation', 'a', 'b'],
-  },
-}
-```
-
----
-
-## 六、学习检查清单
+## 八、学习检查清单
 
 完成以下所有项目,说明你已掌握本节内容:
 
@@ -550,6 +651,7 @@ console.log(response.choices[0].message)
 - [ ] 理解 Function Calling 的工作流程
 - [ ] 知道 AI 不会真正执行函数,只是返回调用指令
 - [ ] 理解 Function Schema 的作用
+- [ ] 了解 AI-backend 项目的架构
 
 ### 第二层:Schema 编写
 
@@ -557,115 +659,106 @@ console.log(response.choices[0].message)
 - [ ] 理解 properties 和 required 的用法
 - [ ] 能够定义不同类型的参数(string、number、boolean、array)
 - [ ] 能够使用 enum 限制参数值
+- [ ] 理解 getTime 和 sum 两个实战案例
 
-### 第三层:实际应用
+### 第三层:架构理解
 
-- [ ] 能够根据需求设计合理的 Function Schema
-- [ ] 知道如何在 API 调用中传入 functions 参数
-- [ ] 理解 AI 返回的 function_call 格式
-- [ ] 知道 arguments 是 JSON 字符串,需要解析
+- [ ] 理解 Adapter Pattern 的作用
+- [ ] 知道如何分离 Schema 和函数实现
+- [ ] 理解 AI-backend 的请求流程
+- [ ] 知道 function_call 在哪里发生
 
 ---
 
-## 七、实践作业
+## 九、实践作业
 
-### 作业 1: 设计"获取时间"函数
+### 作业 1: 设计"获取天气"函数 Schema
 
-设计一个获取当前时间的函数 Schema:
-
-**要求**:
-- 函数名: `getTime`
-- 参数: `timezone` (时区,可选,默认为本地时区)
-- 支持的时区: `UTC`、`Asia/Shanghai`、`America/New_York`
-
-### 作业 2: 设计"计算器"函数
-
-设计一个通用计算器函数 Schema:
+设计一个获取天气的函数 Schema:
 
 **要求**:
-- 函数名: `calculate`
+- 函数名: `getWeather`
 - 参数:
-  - `expression`: 数学表达式字符串,如 "2 + 3 * 4"
-  - 或者分开定义: `num1`、`num2`、`operator`
+  - `city` (必填,string): 城市名称
+  - `unit` (可选,enum): 温度单位,可选值 `celsius`、`fahrenheit`
+- 参考 AI-backend 的 getTime Schema 设计风格
 
-### 作业 3: 设计"预订酒店"函数
-
-设计一个酒店预订函数 Schema:
+### 作业 2: 探索 AI-backend 项目
 
 **要求**:
-- 函数名: `bookHotel`
-- 必填参数: 城市、入住日期、退房日期
-- 可选参数: 房间类型、人数、特殊要求
+1. 克隆或查看 AI-backend 项目代码
+2. 找到 `functions/` 和 `schemas/` 目录
+3. 阅读 `getTime.js` 和 `getTime.schema.js`
+4. 运行测试: `node functions/getTime.js`
+5. 理解 Schema 和函数实现的对应关系
+
+### 作业 3: 设计"发送邮件"函数 Schema
+
+设计一个发送邮件的函数 Schema:
+
+**要求**:
+- 函数名: `sendEmail`
+- 必填参数: 收件人邮箱、邮件主题、邮件正文
+- 可选参数: 抄送邮箱列表(array)
+- 包含详细的 description
 
 ---
 
-## 八、常见问题
+## 十、常见问题
 
-### Q1: description 写多详细才合适?
+### Q1: Schema 的 description 写多详细才合适?
 
-**答**: 越详细越好,但要简洁。核心原则:
+**答**: 越详细越好,但要简洁。参考 AI-backend 的写法:
 
 ```javascript
-// ❌ 太简单
-description: '获取天气'
+// ✓ AI-backend 风格:清晰、有默认行为说明
+description: '获取指定时区的当前时间。如果不指定时区,返回北京时间。'
 
-// ✓ 合适
-description: '获取指定城市的当前天气信息,包括温度、天气状况、湿度等'
+// ✗ 太简单
+description: '获取时间'
 
-// ✓ 也可以
+// ✓ 也很好:详细且包含返回信息
 description: '查询指定城市的实时天气。需要提供城市名称,返回温度、天气、风速等信息。'
 ```
 
-### Q2: 参数名可以使用中文吗?
+### Q2: 为什么要分离 Schema 和函数实现?
 
-**答**: 技术上可以,但**强烈不推荐**:
+**答**: 参考 AI-backend 的设计:
+- **职责分离**: Schema 只描述接口,函数只实现逻辑
+- **易于维护**: 修改实现不影响 Schema
+- **代码复用**: Schema 可用于文档生成、前端验证
+- **团队协作**: 前端可以先拿 Schema 开发,后端再实现函数
 
-```javascript
-// ❌ 不推荐
-properties: {
-  城市: { type: 'string' }
-}
+### Q3: Adapter Pattern 有什么实际好处?
 
-// ✓ 推荐
-properties: {
-  city: {
-    type: 'string',
-    description: '城市名称'  // 在 description 中用中文说明
-  }
-}
-```
-
-### Q3: 什么时候用 enum?
-
-**答**: 当参数只能从固定的几个值中选择时:
-
-```javascript
-// 适合使用 enum 的场景
-{
-  unit: {
-    type: 'string',
-    enum: ['celsius', 'fahrenheit'],  // 温度单位只有这两个
-  },
-  priority: {
-    type: 'string',
-    enum: ['low', 'medium', 'high'],  // 优先级只有三档
-  },
-}
-```
+**答**: AI-backend 的 Adapter Pattern 带来:
+- 统一接口,切换 DeepSeek/OpenAI 只需改配置
+- 业务代码不关心具体 AI 提供商
+- 易于添加新提供商(Claude、Gemini 等)
+- 便于测试和 mock
 
 ---
 
-## 九、下一步学习方向
+## 十一、下一步学习方向
 
-完成本节后,你已经理解了 Function Schema 的设计。接下来你将:
+完成本节后,你已经理解了 Function Schema 和企业级架构。接下来你将:
 
-1. **Step 30**: 编写两个最小函数: getTime / sum
+1. **Step 30**: 编写两个最小函数: getTime / sum (使用 AI-backend 的实际代码)
 2. **Step 31**: 让模型根据内容自动调用函数
 3. **Step 32**: 调试 function_call → arguments 的 JSON 化
-4. **Step 33**: 加入结构化返回(zod 也可以)
-5. **Step 34**: 做一个"天气查询"demo
-6. **Step 35**: 整理文档
+4. **Step 33**: 加入结构化返回(Joi/Zod)
+5. **Step 34**: 构建完整的天气查询 API
+6. **Step 35**: 总结企业级最佳实践
 
 ---
 
-**记住: Function Schema 是 AI 理解你的函数的唯一途径,写得越清晰,AI 调用得越准确。**
+## 十二、参考资源
+
+- **AI-backend 项目路径**: `/Users/jianglin/Desktop/backend/AI-backend`
+- **关键文件**:
+  - `functions/getTime.js` - 函数实现示例
+  - `schemas/getTime.schema.js` - Schema 定义示例
+  - `src/adapters/base.adapter.js` - Adapter 基类
+  - `src/services/ai.service.js` - Service 层
+
+**记住: Function Schema 是 AI 理解你的函数的唯一途径,写得越清晰,AI 调用得越准确。AI-backend 项目展示了如何在生产环境中优雅地组织这些代码。**

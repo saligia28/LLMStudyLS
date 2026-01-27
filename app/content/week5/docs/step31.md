@@ -2,647 +2,621 @@
 
 ## 学习目标
 
-这个任务的本质是回答一个核心问题:**如何让 AI 模型根据用户输入自动选择并调用合适的函数**。
+这个任务的本质是回答一个核心问题:**如何让 AI 模型根据用户输入自动选择并调用合适的函数,并在企业级应用中实现完整的调用流程**。
 
 通过本教程,你将:
 
-1. 学会在 API 请求中传入函数定义
-2. 理解 AI 如何分析用户意图并选择函数
-3. 掌握解析 AI 返回的函数调用指令
-4. 实现完整的函数调用流程
+1. 理解 AI-backend 项目中的完整函数调用流程
+2. 学习如何通过 AIService 和 Adapter 传递函数定义
+3. 掌握解析 function_call 并执行函数的方法
+4. 实现多轮对话和函数执行的集成
+
+> **实战重点**: 本教程将展示如何在 AI-backend 的架构基础上扩展 Function Calling 功能。
 
 ---
 
-## 一、核心认知:AI 如何决定调用哪个函数?
+## 一、AI-backend 的函数调用流程
 
-### 1.1 AI 的决策过程
+### 1.1 完整的请求链路
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│              AI 函数调用决策流程                               │
+│        AI-backend 中的 Function Calling 完整流程                │
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
-│   输入:用户消息 + 可用函数列表                                 │
-│   ┌─────────────────────────────────────────────────┐       │
-│   │  用户: "现在几点了?"                             │       │
-│   │                                                 │       │
-│   │  可用函数:                                       │       │
-│   │  - getTime: "获取当前时间"                       │       │
-│   │  - sum: "计算两个数的和"                         │       │
-│   └─────────────────────────────────────────────────┘       │
-│                         ↓                                   │
-│   AI 分析:                                                   │
-│   ┌─────────────────────────────────────────────────┐       │
-│   │  1. 理解用户意图: 查询时间                       │       │
-│   │  2. 匹配函数描述:                                │       │
-│   │     - getTime ✓ (匹配!)                         │       │
-│   │     - sum ✗ (不匹配,这是计算功能)                │       │
-│   │  3. 决定: 调用 getTime                          │       │
-│   └─────────────────────────────────────────────────┘       │
-│                         ↓                                   │
-│   输出:函数调用指令                                           │
-│   ┌─────────────────────────────────────────────────┐       │
-│   │  {                                              │       │
-│   │    role: "assistant",                          │       │
-│   │    content: null,                              │       │
-│   │    function_call: {                            │       │
-│   │      name: "getTime",                          │       │
-│   │      arguments: "{}"                           │       │
-│   │    }                                           │       │
-│   │  }                                             │       │
-│   └─────────────────────────────────────────────────┘       │
+│   1. 用户请求                                                │
+│      POST /api/chat                                         │
+│      {                                                      │
+│        messages: [{ role: "user", content: "现在几点?" }],   │
+│        functions: [getTimeSchema, sumSchema]  ← 传入 Schema │
+│      }                                                      │
+│      ↓                                                      │
+│   2. ChatController 接收请求                                 │
+│      - 使用 chatValidator 验证参数                           │
+│      - 调用 aiService.chat()                                │
+│      ↓                                                      │
+│   3. AIService 处理                                          │
+│      - 获取 provider (deepseek/openai)                      │
+│      - 从 factory 获取对应 adapter                           │
+│      - 调用 adapter.chat(messages, { functions })          │
+│      ↓                                                      │
+│   4. DeepSeekAdapter 发送请求                                │
+│      const response = await this.client.chat.completions    │
+│        .create({                                            │
+│          model: 'deepseek-chat',                           │
+│          messages: messages,                               │
+│          functions: functions  ← 传给 AI Provider           │
+│        })                                                   │
+│      ↓                                                      │
+│   5. AI Provider 返回                                        │
+│      {                                                      │
+│        choices: [{                                         │
+│          message: {                                        │
+│            role: "assistant",                              │
+│            content: null,                                  │
+│            function_call: {                                │
+│              name: "getTime",                              │
+│              arguments: '{"timezone":"Asia/Shanghai"}'     │
+│            }                                               │
+│          }                                                 │
+│        }]                                                  │
+│      }                                                      │
+│      ↓                                                      │
+│   6. 【需要我们实现】解析并执行函数                            │
+│      const args = JSON.parse(arguments)                    │
+│      const result = getTime(args.timezone)                 │
+│      ↓                                                      │
+│   7. 【需要我们实现】将结果返回给 AI                           │
+│      再次调用 chat API,添加 function 消息                    │
+│      ↓                                                      │
+│   8. AI 生成最终回复                                         │
+│      "当前北京时间是 2024-01-27 14:30:45"                   │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 1.2 匹配的关键:函数描述
+### 1.2 当前 AI-backend 的能力范围
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│         函数描述对 AI 决策的影响                                │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│   场景 1: 描述清晰 → AI 准确匹配                              │
-│   ┌─────────────────────────────────────────────────┐       │
-│   │  用户: "帮我算一下 10 加 20 等于多少"            │       │
-│   │                                                 │       │
-│   │  函数:                                          │       │
-│   │  {                                              │       │
-│   │    name: "sum",                                │       │
-│   │    description: "计算两个数字的和"               │       │
-│   │  }                                              │       │
-│   │                                                 │       │
-│   │  结果: ✓ AI 正确调用 sum(10, 20)                │       │
-│   └─────────────────────────────────────────────────┘       │
-│                                                             │
-│   场景 2: 描述模糊 → AI 可能误判                              │
-│   ┌─────────────────────────────────────────────────┐       │
-│   │  用户: "帮我算一下 10 加 20 等于多少"            │       │
-│   │                                                 │       │
-│   │  函数:                                          │       │
-│   │  {                                              │       │
-│   │    name: "sum",                                │       │
-│   │    description: "处理数字"  // ✗ 太模糊!        │       │
-│   │  }                                              │       │
-│   │                                                 │       │
-│   │  结果: ✗ AI 可能不知道该调用这个函数             │       │
-│   └─────────────────────────────────────────────────┘       │
-│                                                             │
-│   关键原则:                                                  │
-│   - 描述要准确,说明函数的具体功能                             │
-│   - 描述要详细,包含关键词(如"加法"、"时间"等)                 │
-│   - 描述要明确,避免歧义                                      │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
-```
+**✓ 已实现**:
+- Controller → Service → Adapter 的完整架构
+- 多 AI 提供商支持(DeepSeek, OpenAI)
+- 消息验证和错误处理
+- 日志记录和性能监控
+
+**✗ 待扩展**:
+- 函数执行器(Function Executor)
+- function_call 的解析和调用
+- 多轮对话管理
+- 函数结果的处理
+
+**我们的目标**: 在现有架构上添加 Function Calling 能力。
 
 ---
 
-## 二、实现完整的函数调用流程
+## 二、实现函数执行器
 
-### 2.1 准备工作
+### 2.1 设计函数执行器类
 
-假设我们已经有了以下文件(来自 Step 30):
-
-```
-week5-function-calling/
-├── functions/
-│   ├── getTime.js
-│   └── sum.js
-└── schemas/
-    ├── getTime.schema.js
-    └── sum.schema.js
-```
-
-### 2.2 创建函数调用主程序
-
-创建 `main.js`:
+创建 `src/utils/functionExecutor.js`:
 
 ```javascript
-import OpenAI from 'openai'
-import { getTime } from './functions/getTime.js'
-import { sum } from './functions/sum.js'
-import { getTimeSchema } from './schemas/getTime.schema.js'
-import { sumSchema } from './schemas/sum.schema.js'
-
-// 初始化 OpenAI 客户端
-const client = new OpenAI({
-  apiKey: process.env.DEEPSEEK_API_KEY,
-  baseURL: process.env.DEEPSEEK_BASEURL,
-})
-
-// 定义可用的函数映射
-const availableFunctions = {
-  getTime: getTime,
-  sum: sum,
-}
+import logger from './logger.js'
+import { BadRequestError } from '../errors/index.js'
 
 /**
- * 主函数:处理用户消息并自动调用函数
- */
-async function chat(userMessage) {
-  console.log(`\n用户: ${userMessage}\n`)
-
-  // 1. 构建消息数组
-  const messages = [
-    { role: 'user', content: userMessage },
-  ]
-
-  // 2. 调用 AI,传入函数定义
-  const response = await client.chat.completions.create({
-    model: 'deepseek-chat',
-    messages: messages,
-    functions: [getTimeSchema, sumSchema],  // 告诉 AI 有哪些函数可用
-  })
-
-  const assistantMessage = response.choices[0].message
-  console.log('AI 返回:', JSON.stringify(assistantMessage, null, 2))
-
-  // 3. 判断 AI 是否要调用函数
-  if (assistantMessage.function_call) {
-    // AI 决定调用函数
-    const functionName = assistantMessage.function_call.name
-    const functionArgs = JSON.parse(assistantMessage.function_call.arguments)
-
-    console.log(`\n→ AI 决定调用函数: ${functionName}`)
-    console.log(`→ 参数: ${JSON.stringify(functionArgs)}`)
-
-    // 4. 执行真正的函数
-    const functionToCall = availableFunctions[functionName]
-    const functionResult = functionToCall(...Object.values(functionArgs))
-
-    console.log(`→ 函数执行结果: ${functionResult}\n`)
-
-    // 5. 将函数结果返回给 AI,让 AI 生成自然语言回复
-    messages.push(assistantMessage)  // 添加 AI 的函数调用消息
-    messages.push({
-      role: 'function',
-      name: functionName,
-      content: String(functionResult),
-    })
-
-    // 6. 再次调用 AI,获取最终回复
-    const finalResponse = await client.chat.completions.create({
-      model: 'deepseek-chat',
-      messages: messages,
-    })
-
-    const finalMessage = finalResponse.choices[0].message.content
-    console.log(`AI: ${finalMessage}`)
-  } else {
-    // AI 直接回复,不需要调用函数
-    console.log(`AI: ${assistantMessage.content}`)
-  }
-}
-
-// 测试
-chat('现在几点了?')
-```
-
-**代码流程解析**:
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│              完整函数调用流程                                  │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│   Step 1: 构建消息数组                                       │
-│   ┌─────────────────────────────────────────────────┐       │
-│   │  messages = [                                   │       │
-│   │    { role: 'user', content: '现在几点了?' }     │       │
-│   │  ]                                              │       │
-│   └─────────────────────────────────────────────────┘       │
-│                         ↓                                   │
-│   Step 2: 调用 AI + 传入函数定义                             │
-│   ┌─────────────────────────────────────────────────┐       │
-│   │  const response = await client.chat             │       │
-│   │    .completions.create({                        │       │
-│   │      model: 'deepseek-chat',                    │       │
-│   │      messages: messages,                        │       │
-│   │      functions: [getTimeSchema, sumSchema]      │       │
-│   │    })                                           │       │
-│   └─────────────────────────────────────────────────┘       │
-│                         ↓                                   │
-│   Step 3: AI 返回函数调用指令                                │
-│   ┌─────────────────────────────────────────────────┐       │
-│   │  {                                              │       │
-│   │    function_call: {                             │       │
-│   │      name: "getTime",                           │       │
-│   │      arguments: "{}"                            │       │
-│   │    }                                            │       │
-│   │  }                                              │       │
-│   └─────────────────────────────────────────────────┘       │
-│                         ↓                                   │
-│   Step 4: 解析并执行函数                                     │
-│   ┌─────────────────────────────────────────────────┐       │
-│   │  const functionName = "getTime"                 │       │
-│   │  const functionArgs = JSON.parse("{}")          │       │
-│   │  const result = getTime()                       │       │
-│   │  // "当前时间 (Asia/Shanghai): 2024-01-26 ..."  │       │
-│   └─────────────────────────────────────────────────┘       │
-│                         ↓                                   │
-│   Step 5: 将结果返回给 AI                                    │
-│   ┌─────────────────────────────────────────────────┐       │
-│   │  messages.push({                                │       │
-│   │    role: 'function',                            │       │
-│   │    name: 'getTime',                             │       │
-│   │    content: '当前时间 (Asia/Shanghai): ...'      │       │
-│   │  })                                             │       │
-│   └─────────────────────────────────────────────────┘       │
-│                         ↓                                   │
-│   Step 6: AI 生成自然语言回复                                │
-│   ┌─────────────────────────────────────────────────┐       │
-│   │  "现在是北京时间 2024 年 1 月 26 日 14:30"       │       │
-│   └─────────────────────────────────────────────────┘       │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### 2.3 关键代码详解
-
-**1. 解析函数参数**
-
-```javascript
-// AI 返回的 arguments 是 JSON 字符串
-const arguments = '{"a": 10, "b": 20}'
-
-// 需要解析成对象
-const functionArgs = JSON.parse(arguments)  // { a: 10, b: 20 }
-
-// 转换成函数参数数组
-const args = Object.values(functionArgs)  // [10, 20]
-
-// 调用函数
-const result = sum(...args)  // sum(10, 20)
-```
-
-**2. 构建 function 消息**
-
-```javascript
-// 函数执行完毕后,需要告诉 AI 结果
-messages.push({
-  role: 'function',      // ← 注意:role 是 'function'
-  name: 'getTime',       // ← 函数名
-  content: String(result)  // ← 函数返回值(必须是字符串)
-})
-```
-
-**3. 第二次调用 AI**
-
-```javascript
-// 第一次调用:AI 返回函数调用指令
-const response1 = await client.chat.completions.create({
-  model: 'deepseek-chat',
-  messages: messages,
-  functions: [...]
-})
-
-// ... 执行函数,添加 function 消息 ...
-
-// 第二次调用:AI 根据函数结果生成自然语言回复
-const response2 = await client.chat.completions.create({
-  model: 'deepseek-chat',
-  messages: messages,  // ← 包含了 function 消息
-  // 注意:第二次调用通常不需要再传 functions 参数
-})
-```
-
----
-
-## 三、测试不同场景
-
-### 3.1 测试场景 1:查询时间
-
-创建 `test-scenarios.js`:
-
-```javascript
-import OpenAI from 'openai'
-import { getTime } from './functions/getTime.js'
-import { sum } from './functions/sum.js'
-import { getTimeSchema } from './schemas/getTime.schema.js'
-import { sumSchema } from './schemas/sum.schema.js'
-
-const client = new OpenAI({
-  apiKey: process.env.DEEPSEEK_API_KEY,
-  baseURL: process.env.DEEPSEEK_BASEURL,
-})
-
-const availableFunctions = {
-  getTime: getTime,
-  sum: sum,
-}
-
-async function chat(userMessage) {
-  console.log(`\n${'='.repeat(60)}`)
-  console.log(`用户: ${userMessage}`)
-  console.log('='.repeat(60))
-
-  const messages = [{ role: 'user', content: userMessage }]
-
-  const response = await client.chat.completions.create({
-    model: 'deepseek-chat',
-    messages: messages,
-    functions: [getTimeSchema, sumSchema],
-  })
-
-  const assistantMessage = response.choices[0].message
-
-  if (assistantMessage.function_call) {
-    const functionName = assistantMessage.function_call.name
-    const functionArgs = JSON.parse(assistantMessage.function_call.arguments)
-
-    console.log(`\n✓ AI 选择调用函数: ${functionName}`)
-    console.log(`✓ 参数: ${JSON.stringify(functionArgs)}`)
-
-    const functionToCall = availableFunctions[functionName]
-    const functionResult = functionToCall(...Object.values(functionArgs))
-
-    console.log(`✓ 执行结果: ${functionResult}`)
-
-    messages.push(assistantMessage)
-    messages.push({
-      role: 'function',
-      name: functionName,
-      content: String(functionResult),
-    })
-
-    const finalResponse = await client.chat.completions.create({
-      model: 'deepseek-chat',
-      messages: messages,
-    })
-
-    console.log(`\nAI 最终回复: ${finalResponse.choices[0].message.content}\n`)
-  } else {
-    console.log(`\nAI 直接回复: ${assistantMessage.content}\n`)
-  }
-}
-
-// 测试场景
-(async () => {
-  // 场景 1: 查询时间(应该调用 getTime)
-  await chat('现在几点了?')
-
-  // 场景 2: 计算(应该调用 sum)
-  await chat('帮我算一下 25 加 37 等于多少')
-
-  // 场景 3: 指定时区(应该调用 getTime 并传参数)
-  await chat('纽约现在是几点?')
-
-  // 场景 4: 不需要函数(应该直接回复)
-  await chat('你好,介绍一下你自己')
-})()
-```
-
-### 3.2 运行测试
-
-```bash
-node test-scenarios.js
-```
-
-预期输出:
-
-```
-============================================================
-用户: 现在几点了?
-============================================================
-
-✓ AI 选择调用函数: getTime
-✓ 参数: {}
-✓ 执行结果: 当前时间 (Asia/Shanghai): 2024-01-26 14:30:45
-
-AI 最终回复: 现在是北京时间 2024 年 1 月 26 日 14 点 30 分 45 秒。
-
-============================================================
-用户: 帮我算一下 25 加 37 等于多少
-============================================================
-
-✓ AI 选择调用函数: sum
-✓ 参数: {"a":25,"b":37}
-✓ 执行结果: 62
-
-AI 最终回复: 25 加 37 等于 62。
-
-============================================================
-用户: 纽约现在是几点?
-============================================================
-
-✓ AI 选择调用函数: getTime
-✓ 参数: {"timezone":"America/New_York"}
-✓ 执行结果: 当前时间 (America/New_York): 2024-01-26 01:30:45
-
-AI 最终回复: 纽约现在是 2024 年 1 月 26 日凌晨 1 点 30 分 45 秒。
-
-============================================================
-用户: 你好,介绍一下你自己
-============================================================
-
-AI 直接回复: 你好!我是一个 AI 助手,可以帮助你回答问题、计算数值、查询时间等。有什么我可以帮助你的吗?
-```
-
----
-
-## 四、优化:封装函数执行器
-
-### 4.1 创建通用函数执行器
-
-创建 `utils/functionExecutor.js`:
-
-```javascript
-/**
- * 通用函数执行器
+ * 函数执行器
+ * 负责注册、解析和执行函数
  */
 export class FunctionExecutor {
-  constructor(functions) {
-    this.functions = functions  // { functionName: functionImplementation }
+  constructor() {
+    this.functions = new Map()
+  }
+
+  /**
+   * 注册函数
+   * @param {string} name - 函数名
+   * @param {Function} fn - 函数实现
+   */
+  register(name, fn) {
+    if (typeof fn !== 'function') {
+      throw new Error(`${name} must be a function`)
+    }
+
+    this.functions.set(name, fn)
+    logger.info(`Registered function: ${name}`)
+  }
+
+  /**
+   * 批量注册函数
+   * @param {Object} functionsMap - { functionName: functionImpl }
+   */
+  registerAll(functionsMap) {
+    Object.entries(functionsMap).forEach(([name, fn]) => {
+      this.register(name, fn)
+    })
   }
 
   /**
    * 执行函数
-   * @param {string} functionName - 函数名
-   * @param {string} argumentsJson - 参数 JSON 字符串
+   * @param {string} name - 函数名
+   * @param {string} argumentsJson - JSON 字符串格式的参数
    * @returns {any} 函数执行结果
    */
-  execute(functionName, argumentsJson) {
+  execute(name, argumentsJson) {
     // 1. 检查函数是否存在
-    if (!this.functions[functionName]) {
-      throw new Error(`函数 ${functionName} 不存在`)
+    if (!this.functions.has(name)) {
+      throw new BadRequestError(`Function ${name} not found`)
     }
 
     // 2. 解析参数
     let args
     try {
-      args = JSON.parse(argumentsJson)
+      // arguments 可能是字符串或对象
+      args = typeof argumentsJson === 'string'
+        ? JSON.parse(argumentsJson)
+        : argumentsJson
     } catch (error) {
-      throw new Error(`参数解析失败: ${error.message}`)
+      logger.error(`Failed to parse arguments for ${name}`, {
+        arguments: argumentsJson,
+        error: error.message,
+      })
+      throw new BadRequestError(`Invalid arguments format: ${error.message}`)
     }
 
     // 3. 执行函数
     try {
-      const func = this.functions[functionName]
-      const result = func(...Object.values(args))
+      const fn = this.functions.get(name)
+      logger.debug(`Executing function: ${name}`, { args })
+
+      const result = fn(args)
+
+      logger.info(`Function ${name} executed successfully`)
       return result
     } catch (error) {
-      throw new Error(`函数执行失败: ${error.message}`)
+      logger.error(`Function ${name} execution failed`, {
+        error: error.message,
+        args,
+      })
+      throw new Error(`Function execution failed: ${error.message}`)
     }
   }
+
+  /**
+   * 获取已注册的函数列表
+   */
+  list() {
+    return Array.from(this.functions.keys())
+  }
+}
+
+// 导出单例
+export default new FunctionExecutor()
+```
+
+### 2.2 注册函数到执行器
+
+创建 `src/config/functions.js`:
+
+```javascript
+import functionExecutor from '../utils/functionExecutor.js'
+import { getTime } from '../../functions/getTime.js'
+import { sum } from '../../functions/sum.js'
+
+/**
+ * 初始化函数执行器
+ * 注册所有可用函数
+ */
+export function initFunctions() {
+  // 方式 1: 单个注册
+  functionExecutor.register('getTime', (args) => {
+    return getTime(args.timezone)
+  })
+
+  functionExecutor.register('sum', (args) => {
+    return sum(args.a, args.b)
+  })
+
+  // 方式 2: 批量注册
+  // functionExecutor.registerAll({
+  //   getTime: (args) => getTime(args.timezone),
+  //   sum: (args) => sum(args.a, args.b),
+  // })
+
+  console.log(`Registered functions: ${functionExecutor.list().join(', ')}`)
 }
 ```
 
-### 4.2 使用函数执行器
+### 2.3 在应用启动时初始化
 
-修改 `main.js`,使用封装好的执行器:
+修改 `server.js`:
 
 ```javascript
-import OpenAI from 'openai'
-import { getTime } from './functions/getTime.js'
-import { sum } from './functions/sum.js'
-import { getTimeSchema } from './schemas/getTime.schema.js'
-import { sumSchema } from './schemas/sum.schema.js'
-import { FunctionExecutor } from './utils/functionExecutor.js'
+import app from './src/app.js'
+import config from './src/config/index.js'
+import logger from './src/utils/logger.js'
+import { initFunctions } from './src/config/functions.js'  // ← 新增
 
-const client = new OpenAI({
-  apiKey: process.env.DEEPSEEK_API_KEY,
-  baseURL: process.env.DEEPSEEK_BASEURL,
+const PORT = config.port
+
+// 初始化函数执行器
+initFunctions()  // ← 新增
+
+app.listen(PORT, () => {
+  logger.info(`Server running on port ${PORT}`)
+  logger.info(`Environment: ${config.env}`)
+  console.log(`🚀 Server ready at http://localhost:${PORT}`)
 })
-
-// 创建函数执行器
-const executor = new FunctionExecutor({
-  getTime: getTime,
-  sum: sum,
-})
-
-async function chat(userMessage) {
-  console.log(`\n用户: ${userMessage}\n`)
-
-  const messages = [{ role: 'user', content: userMessage }]
-
-  const response = await client.chat.completions.create({
-    model: 'deepseek-chat',
-    messages: messages,
-    functions: [getTimeSchema, sumSchema],
-  })
-
-  const assistantMessage = response.choices[0].message
-
-  if (assistantMessage.function_call) {
-    const { name, arguments: args } = assistantMessage.function_call
-
-    console.log(`→ 调用函数: ${name}(${args})`)
-
-    // 使用执行器执行函数
-    const result = executor.execute(name, args)
-
-    console.log(`→ 执行结果: ${result}\n`)
-
-    messages.push(assistantMessage)
-    messages.push({
-      role: 'function',
-      name: name,
-      content: String(result),
-    })
-
-    const finalResponse = await client.chat.completions.create({
-      model: 'deepseek-chat',
-      messages: messages,
-    })
-
-    console.log(`AI: ${finalResponse.choices[0].message.content}`)
-  } else {
-    console.log(`AI: ${assistantMessage.content}`)
-  }
-}
-
-// 测试
-chat('10 加 20 等于多少?')
 ```
 
 ---
 
-## 五、学习检查清单
+## 三、扩展 ChatController 支持函数调用
 
-完成以下所有项目,说明你已掌握本节内容:
+### 3.1 处理 function_call 响应
 
-### 第一层:概念理解
+修改 `src/controllers/chat.controller.js`:
 
-- [ ] 理解 AI 如何根据函数描述选择函数
-- [ ] 理解函数调用的完整流程(两次 API 调用)
-- [ ] 知道 function_call.arguments 是 JSON 字符串
-- [ ] 理解 role: 'function' 的消息格式
+```javascript
+import aiService from '../services/ai.service.js'
+import functionExecutor from '../utils/functionExecutor.js'
+import { success } from '../utils/response.js'
+import { validateChatRequest } from '../validators/chatValidator.js'
+import { StreamHandler } from '../utils/streamHandler.js'
+import logger from '../utils/logger.js'
+
+class ChatController {
+  /**
+   * 标准聊天(支持函数调用)
+   */
+  async chat(req, res) {
+    const validatedData = validateChatRequest(req.body)
+    const messages = [...validatedData.messages]
+
+    // 第一次调用 AI
+    let result = await aiService.chat(messages, {
+      provider: validatedData.provider,
+      model: validatedData.model,
+      temperature: validatedData.temperature,
+      max_tokens: validatedData.maxTokens,
+      functions: validatedData.functions, // ← 传入函数定义
+    })
+
+    // 检查是否需要调用函数
+    if (result.function_call) {
+      const { name, arguments: args } = result.function_call
+
+      logger.info(`AI requested function call`, { name, args })
+
+      try {
+        // 执行函数
+        const functionResult = functionExecutor.execute(name, args)
+
+        logger.info(`Function ${name} executed`, { result: functionResult })
+
+        // 添加 assistant 消息(带 function_call)
+        messages.push({
+          role: 'assistant',
+          content: null,
+          function_call: result.function_call,
+        })
+
+        // 添加 function 消息(函数执行结果)
+        messages.push({
+          role: 'function',
+          name: name,
+          content: typeof functionResult === 'string'
+            ? functionResult
+            : JSON.stringify(functionResult),
+        })
+
+        // 第二次调用 AI,让它生成最终回复
+        result = await aiService.chat(messages, {
+          provider: validatedData.provider,
+          model: validatedData.model,
+          temperature: validatedData.temperature,
+          max_tokens: validatedData.maxTokens,
+        })
+
+        logger.info(`Final response generated`)
+
+      } catch (error) {
+        logger.error(`Function execution failed`, { error: error.message })
+
+        // 告诉 AI 函数执行失败
+        messages.push({
+          role: 'assistant',
+          content: null,
+          function_call: result.function_call,
+        })
+        messages.push({
+          role: 'function',
+          name: name,
+          content: JSON.stringify({ error: error.message }),
+        })
+
+        // 让 AI 生成错误回复
+        result = await aiService.chat(messages, {
+          provider: validatedData.provider,
+          model: validatedData.model,
+        })
+      }
+    }
+
+    return res.json(success(result))
+  }
+
+  // ... 其他方法保持不变
+}
+
+export default new ChatController()
+```
+
+### 3.2 更新 Validator 支持 functions 参数
+
+修改 `src/validators/chatValidator.js`:
+
+```javascript
+import Joi from 'joi'
+import { BadRequestError } from '../errors/index.js'
+
+// 消息 Schema
+const messageSchema = Joi.object({
+  role: Joi.string().valid('system', 'user', 'assistant', 'function').required(),
+  content: Joi.string().max(10000).allow(null),
+  name: Joi.string().optional(), // function role 需要
+  function_call: Joi.object().optional(), // assistant 带函数调用时
+})
+
+// Function Schema
+const functionSchema = Joi.object({
+  name: Joi.string().required(),
+  description: Joi.string().required(),
+  parameters: Joi.object().required(),
+})
+
+// 聊天请求 Schema
+const chatRequestSchema = Joi.object({
+  messages: Joi.array().items(messageSchema).min(1).max(50).required(),
+  provider: Joi.string().valid('deepseek', 'openai', 'claude').optional(),
+  model: Joi.string().optional(),
+  temperature: Joi.number().min(0).max(2).optional(),
+  maxTokens: Joi.number().min(1).max(8000).optional(),
+  functions: Joi.array().items(functionSchema).optional(), // ← 新增
+})
+
+export function validateChatRequest(data) {
+  const { error, value } = chatRequestSchema.validate(data, {
+    abortEarly: false,
+  })
+
+  if (error) {
+    const errors = error.details.map((detail) => ({
+      field: detail.path.join('.'),
+      message: detail.message,
+    }))
+    throw new BadRequestError('Validation failed', errors)
+  }
+
+  return value
+}
+```
+
+---
+
+## 四、测试函数调用
+
+### 4.1 准备测试数据
+
+创建测试文件 `test-function-calling.http`:
+
+```http
+### 测试 1: 不带参数的函数调用
+POST http://localhost:3000/api/chat
+Content-Type: application/json
+
+{
+  "messages": [
+    { "role": "user", "content": "现在几点了?" }
+  ],
+  "functions": [
+    {
+      "name": "getTime",
+      "description": "获取指定时区的当前时间。如果不指定时区,返回北京时间。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "timezone": {
+            "type": "string",
+            "description": "时区标识符",
+            "enum": ["UTC", "Asia/Shanghai", "America/New_York"],
+            "default": "Asia/Shanghai"
+          }
+        },
+        "required": []
+      }
+    }
+  ]
+}
+
+### 测试 2: 带参数的函数调用
+POST http://localhost:3000/api/chat
+Content-Type: application/json
+
+{
+  "messages": [
+    { "role": "user", "content": "帮我算一下 123 加 456 等于多少" }
+  ],
+  "functions": [
+    {
+      "name": "sum",
+      "description": "计算两个数字的和。支持整数和浮点数。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "a": { "type": "number", "description": "第一个加数" },
+          "b": { "type": "number", "description": "第二个加数" }
+        },
+        "required": ["a", "b"]
+      }
+    }
+  ]
+}
+
+### 测试 3: 多函数场景
+POST http://localhost:3000/api/chat
+Content-Type: application/json
+
+{
+  "messages": [
+    { "role": "user", "content": "现在几点?顺便帮我算 10+20" }
+  ],
+  "functions": [
+    {
+      "name": "getTime",
+      "description": "获取当前时间",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "timezone": {
+            "type": "string",
+            "enum": ["UTC", "Asia/Shanghai", "America/New_York"]
+          }
+        },
+        "required": []
+      }
+    },
+    {
+      "name": "sum",
+      "description": "计算两个数的和",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "a": { "type": "number" },
+          "b": { "type": "number" }
+        },
+        "required": ["a", "b"]
+      }
+    }
+  ]
+}
+```
+
+### 4.2 预期响应流程
+
+**测试 1 的完整流程**:
+
+```
+1. 用户: "现在几点了?"
+   ↓
+2. AI 返回 function_call: { name: "getTime", arguments: "{}" }
+   ↓
+3. 执行 getTime() → "当前时间 (Asia/Shanghai): 2024-01-27 14:30:45"
+   ↓
+4. 将结果发回 AI
+   ↓
+5. AI 最终回复: "现在是北京时间 2024年1月27日 14:30:45"
+```
+
+---
+
+## 五、AI-backend 架构的优势
+
+### 5.1 设计模式的应用
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│       AI-backend 中 Function Calling 的架构优势                 │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│   1. 单一职责原则                                             │
+│      - Controller: 处理 HTTP 请求/响应                       │
+│      - Service: 编排业务逻辑                                 │
+│      - Adapter: 对接 AI Provider                            │
+│      - Executor: 执行函数                                    │
+│                                                             │
+│   2. 开闭原则                                                │
+│      - 添加新函数: 只需注册到 executor                        │
+│      - 添加新 Provider: 只需实现 BaseAdapter                 │
+│      - 不修改现有代码                                        │
+│                                                             │
+│   3. 依赖倒置                                                │
+│      - Service 依赖 Adapter 接口,不依赖具体实现               │
+│      - 便于测试和 mock                                       │
+│                                                             │
+│   4. 统一错误处理                                            │
+│      - 函数执行错误被 catch 并转换为 ApiError                 │
+│      - 日志记录完整                                          │
+│      - 用户友好的错误信息                                     │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 5.2 对比简单实现
+
+**简单实现** (不推荐):
+```javascript
+// 所有逻辑混在一起
+app.post('/chat', async (req, res) => {
+  const response = await fetch('https://api.deepseek.com/chat', {
+    method: 'POST',
+    body: JSON.stringify(req.body)
+  })
+  const data = await response.json()
+
+  if (data.function_call) {
+    if (data.function_call.name === 'getTime') {
+      const result = getTime()
+      // ... 继续处理
+    }
+  }
+  res.json(data)
+})
+```
+
+**AI-backend 实现** (推荐):
+```javascript
+// 清晰的职责分离
+Controller → Validator → Service → Adapter → Executor
+     ↓           ↓          ↓          ↓         ↓
+  HTTP请求    参数验证   业务编排   Provider  函数执行
+```
+
+---
+
+## 六、学习检查清单
+
+### 第一层:流程理解
+
+- [ ] 理解 AI-backend 的完整调用链路
+- [ ] 知道 function_call 在哪个环节返回
+- [ ] 理解为什么需要两次 AI 调用
+- [ ] 知道如何将函数结果返回给 AI
 
 ### 第二层:代码实现
 
-- [ ] 能够在 API 请求中传入 functions 参数
-- [ ] 能够判断 AI 是否返回了 function_call
-- [ ] 能够解析 arguments 并执行函数
-- [ ] 能够构建 function 消息并获取最终回复
+- [ ] 实现了 FunctionExecutor 类
+- [ ] 在 Controller 中添加了 function_call 处理
+- [ ] 更新了 Validator 支持 functions 参数
+- [ ] 在应用启动时注册了函数
 
-### 第三层:实际应用
+### 第三层:测试验证
 
-- [ ] 测试了查询时间的场景
-- [ ] 测试了计算的场景
-- [ ] 测试了不需要函数的场景
-- [ ] 封装了通用的函数执行器
-
----
-
-## 六、常见问题
-
-### Q1: 为什么需要调用 AI 两次?
-
-**答**: 第一次获取函数调用指令,第二次生成自然语言回复:
-
-```javascript
-// 第一次:获取函数调用指令
-AI: { function_call: { name: "sum", arguments: "{\"a\":10,\"b\":20}" } }
-
-// 执行函数 → 30
-
-// 第二次:生成自然语言回复
-AI: "10 加 20 等于 30。"
-```
-
-### Q2: 可以跳过第二次调用吗?
-
-**答**: 可以,但不推荐:
-
-```javascript
-// 跳过第二次调用,直接返回结果
-const result = sum(10, 20)
-console.log(`结果: ${result}`)  // "结果: 30"
-
-// 使用第二次调用,AI 生成更友好的回复
-// "10 加 20 等于 30,希望对您有帮助!"
-```
-
-### Q3: 如果 AI 选错函数怎么办?
-
-**答**: 检查函数描述是否清晰:
-
-```javascript
-// ✗ 描述不清晰,AI 可能误判
-{
-  name: 'process',
-  description: '处理数据'
-}
-
-// ✓ 描述清晰,AI 准确匹配
-{
-  name: 'sum',
-  description: '计算两个数字的加法和。例如:sum(10, 20) 返回 30'
-}
-```
+- [ ] 成功调用 getTime 函数
+- [ ] 成功调用 sum 函数
+- [ ] 测试了多函数场景
+- [ ] 测试了错误处理
 
 ---
 
-## 七、下一步学习方向
+## 七、下一步
 
-完成本节后,你已经实现了基础的函数调用。接下来你将:
+完成本节后,你已经实现了完整的函数调用流程。接下来:
 
-1. **Step 32**: 调试 function_call → arguments 的 JSON 化
-2. **Step 33**: 加入结构化返回(zod 也可以)
-3. **Step 34**: 做一个"天气查询"demo
-4. **Step 35**: 整理文档
+1. **Step 32**: 深入调试 arguments 的 JSON 解析
+2. **Step 33**: 使用 Joi/Zod 增强参数验证
+3. **Step 34**: 构建完整的天气查询 API
+4. **Step 35**: 总结企业级最佳实践
 
 ---
 
-**记住: 函数调用的核心是"AI 提供指令,开发者执行函数",两次 API 调用缺一不可。**
+**记住: AI-backend 的架构让 Function Calling 的集成变得清晰和可维护。每一层都有明确的职责,便于扩展和测试。**

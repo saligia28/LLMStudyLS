@@ -6,82 +6,90 @@
 
 通过本教程,你将:
 
-1. 学会编写实际可执行的 JavaScript 函数
-2. 为函数定义对应的 Function Schema
-3. 理解函数实现和 Schema 定义的对应关系
-4. 掌握函数参数验证和错误处理
+1. 学习 AI-backend 项目中的函数实现规范
+2. 理解函数实现和 Schema 定义的对应关系
+3. 掌握函数参数验证和错误处理的企业级实践
+4. 学会编写可测试、可维护的函数代码
+
+> **实战项目**: 本教程直接使用 AI-backend 项目中的真实函数代码,展示生产级的实现标准。
 
 ---
 
-## 一、核心认知:Function Schema vs 实际函数
+## 一、AI-backend 的函数组织结构
 
-### 1.1 两者的关系
+### 1.1 目录结构
+
+```
+AI-backend/
+├── functions/                 # 函数实现目录
+│   ├── getTime.js            # 时间函数(✓ 已实现)
+│   ├── sum.js                # 求和函数(✓ 已实现)
+│   └── index.js              # 统一导出(待创建)
+│
+├── schemas/                   # Schema 定义目录
+│   ├── getTime.schema.js     # 时间函数 Schema
+│   ├── sum.schema.js         # 求和函数 Schema
+│   └── index.js              # 统一导出
+│
+└── src/
+    ├── adapters/             # AI 适配器
+    ├── services/
+    │   └── ai.service.js     # 调用这些函数
+    └── ...
+```
+
+### 1.2 函数与 Schema 的关系
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │         Function Schema vs 实际函数的关系                       │
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
-│   Function Schema (告诉 AI 有什么函数)                        │
+│   Schema (给 AI 看的"说明书")                                 │
 │   ┌─────────────────────────────────────────────────┐       │
+│   │  schemas/getTime.schema.js                     │       │
 │   │  {                                              │       │
-│   │    name: "sum",                                │       │
-│   │    description: "计算两个数的和",               │       │
+│   │    name: "getTime",                            │       │
+│   │    description: "获取指定时区的当前时间",        │       │
 │   │    parameters: {                               │       │
-│   │      type: "object",                           │       │
-│   │      properties: {                             │       │
-│   │        a: { type: "number" },                 │       │
-│   │        b: { type: "number" }                  │       │
-│   │      },                                        │       │
-│   │      required: ["a", "b"]                      │       │
+│   │      timezone: { type: "string", ... }         │       │
 │   │    }                                           │       │
 │   │  }                                             │       │
 │   └─────────────────────────────────────────────────┘       │
-│                         ↓                                   │
-│                   AI 理解并返回调用指令                        │
-│                         ↓                                   │
+│                         ↓ 对应                              │
+│   Implementation (真正执行的代码)                             │
 │   ┌─────────────────────────────────────────────────┐       │
-│   │  {                                              │       │
-│   │    name: "sum",                                │       │
-│   │    arguments: '{"a": 10, "b": 20}'            │       │
+│   │  functions/getTime.js                          │       │
+│   │  export function getTime(timezone) {           │       │
+│   │    // 参数验证                                   │       │
+│   │    // 业务逻辑                                   │       │
+│   │    // 返回结果                                   │       │
+│   │    return formattedTime                        │       │
 │   │  }                                             │       │
-│   └─────────────────────────────────────────────────┘       │
-│                         ↓                                   │
-│                开发者解析并调用实际函数                         │
-│                         ↓                                   │
-│   实际函数 (真正执行计算)                                      │
-│   ┌─────────────────────────────────────────────────┐       │
-│   │  function sum(a, b) {                          │       │
-│   │    return a + b                                │       │
-│   │  }                                             │       │
-│   │                                                │       │
-│   │  const result = sum(10, 20)  // 30            │       │
 │   └─────────────────────────────────────────────────┘       │
 │                                                             │
-│   关键理解:                                                  │
-│   - Schema 是"函数的说明书",给 AI 看的                        │
-│   - 实际函数是"真正干活的代码",给系统执行的                     │
-│   - 两者必须保持一致(名称、参数、功能)                         │
+│   关键原则:                                                  │
+│   - 函数名必须一致 (getTime ↔ "getTime")                     │
+│   - 参数定义必须匹配                                          │
+│   - 功能描述必须准确                                          │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 二、实现第一个函数:getTime
+## 二、实战案例 1: getTime 函数
 
 ### 2.1 需求分析
 
-**功能**: 获取当前时间
-**参数**:
-- `timezone` (可选): 时区,默认为本地时区
-- 支持的时区: `UTC`、`Asia/Shanghai`、`America/New_York`
-
+**功能**: 获取指定时区的当前时间
+**参数**: `timezone` (可选,默认 `Asia/Shanghai`)
 **返回**: 格式化的时间字符串
+**支持时区**: UTC, Asia/Shanghai, America/New_York
 
-### 2.2 编写实际函数
+### 2.2 查看 AI-backend 的实现
 
-创建文件 `functions/getTime.js`:
+**文件路径**: `/Users/jianglin/Desktop/backend/AI-backend/functions/getTime.js`
 
 ```javascript
 /**
@@ -114,43 +122,51 @@ export function getTime(timezone = 'Asia/Shanghai') {
   }
 }
 
-// 测试函数
+// 测试函数(自测试模式)
 if (import.meta.url === `file://${process.argv[1]}`) {
-  console.log(getTime())  // 默认时区
-  console.log(getTime('UTC'))  // UTC 时区
-  console.log(getTime('America/New_York'))  // 纽约时区
+  console.log(getTime()) // 默认时区
+  console.log(getTime('UTC')) // UTC 时区
+  console.log(getTime('America/New_York')) // 纽约时区
 }
 ```
 
-**代码解析**:
+### 2.3 代码实现要点解析
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │              getTime 函数实现要点                              │
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
-│   1. 参数处理                                                │
-│      - 使用默认参数: timezone = 'Asia/Shanghai'              │
-│      - 如果调用时不传参数,自动使用默认值                       │
+│   1. 参数默认值处理                                           │
+│      timezone = 'Asia/Shanghai'                            │
+│      ↑ JavaScript 原生默认参数,优雅且高效                     │
 │                                                             │
-│   2. 时区处理                                                │
-│      - 使用 Intl.DateTimeFormat 处理不同时区                 │
-│      - 支持标准时区标识符(IANA 时区数据库)                    │
+│   2. 使用 Intl API (国际化标准)                              │
+│      const formatter = new Intl.DateTimeFormat()           │
+│      ↑ 浏览器/Node.js 原生支持,无需第三方库                   │
+│      ↑ 自动处理夏令时、时区转换等复杂情况                      │
 │                                                             │
-│   3. 错误处理                                                │
-│      - 使用 try-catch 捕获异常                               │
-│      - 抛出清晰的错误信息                                    │
+│   3. 完整的错误处理                                          │
+│      try { ... } catch (error) {                           │
+│        throw new Error(`获取时间失败: ${error.message}`)     │
+│      }                                                     │
+│      ↑ 捕获异常,包装清晰的错误信息                            │
 │                                                             │
-│   4. 返回值                                                 │
-│      - 返回格式化的字符串,方便阅读                            │
-│      - 包含时区信息,避免歧义                                 │
+│   4. 自测试模式 (非常实用!)                                   │
+│      if (import.meta.url === `file://${process.argv[1]}`)  │
+│      ↑ 直接运行文件时自动执行测试                             │
+│      ↑ 作为模块导入时不执行                                  │
+│                                                             │
+│   5. 返回格式化字符串(而非对象)                               │
+│      return `当前时间 (${timezone}): ${formattedTime}`      │
+│      ↑ AI 更容易理解和生成自然语言回复                        │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 2.3 定义 Function Schema
+### 2.4 对应的 Function Schema
 
-创建文件 `schemas/getTime.schema.js`:
+**文件路径**: `/Users/jianglin/Desktop/backend/AI-backend/schemas/getTime.schema.js`
 
 ```javascript
 export const getTimeSchema = {
@@ -166,54 +182,52 @@ export const getTimeSchema = {
         default: 'Asia/Shanghai',
       },
     },
-    required: [],  // 注意:timezone 是可选的,所以 required 为空数组
+    required: [], // timezone 是可选的
   },
 }
 ```
 
-**Schema 设计要点**:
+### 2.5 Schema 与实现的对应关系
 
+| 元素 | Schema 定义 | 函数实现 | 说明 |
+|------|------------|---------|------|
+| 函数名 | `name: 'getTime'` | `function getTime()` | 必须完全一致 |
+| 参数名 | `timezone` | `timezone = 'Asia/Shanghai'` | 名称一致 |
+| 参数类型 | `type: 'string'` | 字符串参数 | 类型匹配 |
+| 可选性 | `required: []` | 有默认值 | 都是可选参数 |
+| 枚举值 | `enum: [...]` | try-catch 处理无效值 | Schema 限制 + 代码容错 |
+
+### 2.6 测试 getTime 函数
+
+```bash
+# 进入 AI-backend 项目
+cd /Users/jianglin/Desktop/backend/AI-backend
+
+# 直接运行函数文件(触发自测试)
+node functions/getTime.js
 ```
-┌─────────────────────────────────────────────────────────────┐
-│              getTime Schema 设计要点                           │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│   ✓ name 与实际函数名一致                                     │
-│     Schema: "getTime"                                       │
-│     函数:   function getTime()                              │
-│                                                             │
-│   ✓ description 清晰说明功能和默认行为                        │
-│     "获取指定时区的当前时间。如果不指定时区,返回北京时间。"      │
-│                                                             │
-│   ✓ 参数定义与函数签名一致                                    │
-│     Schema 参数: timezone (可选)                             │
-│     函数参数:    timezone = 'Asia/Shanghai'                  │
-│                                                             │
-│   ✓ 使用 enum 限制有效值                                     │
-│     防止 AI 传入不支持的时区                                  │
-│                                                             │
-│   ✓ required 为空数组                                        │
-│     因为 timezone 有默认值,不是必填参数                       │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
+
+**预期输出**:
+```
+当前时间 (Asia/Shanghai): 2024-01-27 14:30:45
+当前时间 (UTC): 2024-01-27 06:30:45
+当前时间 (America/New_York): 2024-01-27 01:30:45
 ```
 
 ---
 
-## 三、实现第二个函数:sum
+## 三、实战案例 2: sum 函数
 
 ### 3.1 需求分析
 
 **功能**: 计算两个数的和
-**参数**:
-- `a` (必填): 第一个数
-- `b` (必填): 第二个数
-
+**参数**: `a` 和 `b` (都是必填)
 **返回**: 两数之和
+**验证**: 必须是数字类型,不能是 NaN
 
-### 3.2 编写实际函数
+### 3.2 查看 AI-backend 的实现
 
-创建文件 `functions/sum.js`:
+**文件路径**: `/Users/jianglin/Desktop/backend/AI-backend/functions/sum.js`
 
 ```javascript
 /**
@@ -239,48 +253,55 @@ export function sum(a, b) {
 
 // 测试函数
 if (import.meta.url === `file://${process.argv[1]}`) {
-  console.log('sum(10, 20) =', sum(10, 20))  // 30
-  console.log('sum(-5, 5) =', sum(-5, 5))    // 0
-  console.log('sum(3.14, 2.86) =', sum(3.14, 2.86))  // 6
+  console.log('sum(10, 20) =', sum(10, 20)) // 30
+  console.log('sum(-5, 5) =', sum(-5, 5)) // 0
+  console.log('sum(3.14, 2.86) =', sum(3.14, 2.86)) // 6
 
   // 测试错误处理
   try {
-    sum('10', 20)  // 应该抛出错误
+    sum('10', 20) // 应该抛出错误
   } catch (error) {
     console.log('错误捕获:', error.message)
   }
 }
 ```
 
-**代码解析**:
+### 3.3 代码实现要点解析
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │              sum 函数实现要点                                  │
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
-│   1. 参数验证 - 非常重要!                                     │
-│      ┌─────────────────────────────────────────────┐        │
-│      │  为什么需要验证?                             │        │
-│      │  - AI 可能传错类型 (字符串 "10" 而不是数字 10) │        │
-│      │  - 确保函数的健壮性                          │        │
-│      │  - 提供清晰的错误信息                        │        │
-│      └─────────────────────────────────────────────┘        │
+│   1. 严格的类型检查                                           │
+│      typeof a !== 'number'                                 │
+│      ↑ AI 可能传错类型(如字符串 "10")                        │
+│      ↑ 必须在函数入口处验证                                  │
 │                                                             │
-│   2. 类型检查                                               │
-│      - typeof a !== 'number'  检查是否为数字类型             │
-│      - isNaN(a)               检查是否为 NaN                │
+│   2. NaN 检查                                               │
+│      isNaN(a) || isNaN(b)                                  │
+│      ↑ NaN 是 number 类型,但不是有效数字                     │
+│      ↑ 需要额外检查                                          │
 │                                                             │
-│   3. 返回值                                                 │
-│      - 直接返回计算结果                                      │
-│      - 不需要额外的格式化                                    │
+│   3. 清晰的错误信息                                          │
+│      throw new Error('参数必须是数字类型')                   │
+│      ↑ 告诉调用者具体哪里错了                                │
+│      ↑ 便于调试和日志记录                                    │
+│                                                             │
+│   4. 简单的业务逻辑                                          │
+│      const result = a + b                                  │
+│      ↑ 保持函数简单,专注核心功能                             │
+│                                                             │
+│   5. 完整的测试覆盖                                          │
+│      • 正常情况: 正整数、负数、浮点数                        │
+│      • 异常情况: 错误类型、NaN                               │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 3.3 定义 Function Schema
+### 3.4 对应的 Function Schema
 
-创建文件 `schemas/sum.schema.js`:
+**文件路径**: `/Users/jianglin/Desktop/backend/AI-backend/schemas/sum.schema.js`
 
 ```javascript
 export const sumSchema = {
@@ -298,389 +319,265 @@ export const sumSchema = {
         description: '第二个加数',
       },
     },
-    required: ['a', 'b'],  // 两个参数都是必填的
+    required: ['a', 'b'], // 两个参数都是必填的
   },
 }
 ```
 
+### 3.5 测试 sum 函数
+
+```bash
+node functions/sum.js
+```
+
+**预期输出**:
+```
+sum(10, 20) = 30
+sum(-5, 5) = 0
+sum(3.14, 2.86) = 6
+错误捕获: 参数必须是数字类型
+```
+
 ---
 
-## 四、组织代码结构
+## 四、企业级函数实现模式
 
-### 4.1 推荐的目录结构
+### 4.1 函数实现的标准流程
 
+```javascript
+export function functionName(param1, param2) {
+  // ========== 第 1 步: 参数验证 ==========
+  if (typeof param1 !== 'expectedType') {
+    throw new Error('param1 类型错误')
+  }
+
+  // ========== 第 2 步: 业务逻辑 ==========
+  try {
+    const result = doBusinessLogic(param1, param2)
+
+    // ========== 第 3 步: 返回值验证 ==========
+    if (!isValidResult(result)) {
+      throw new Error('结果验证失败')
+    }
+
+    return result
+  } catch (error) {
+    // ========== 第 4 步: 错误处理 ==========
+    throw new Error(`函数执行失败: ${error.message}`)
+  }
+}
 ```
-week5-function-calling/
-├── functions/           # 实际函数实现
-│   ├── getTime.js
-│   └── sum.js
-├── schemas/            # Function Schema 定义
-│   ├── getTime.schema.js
-│   └── sum.schema.js
-├── utils/              # 工具函数
-│   └── functionExecutor.js  # 函数执行器(稍后实现)
-└── test.js             # 测试文件
-```
 
-### 4.2 为什么要分离 Schema 和实现?
+### 4.2 AI-backend 的设计原则
+
+1. **职责单一**: 每个函数只做一件事
+2. **参数验证**: 永远不信任输入
+3. **错误清晰**: 错误信息要能定位问题
+4. **可测试性**: 提供自测试入口
+5. **文档完整**: JSDoc 注释说明用途
+
+### 4.3 为什么要严格验证参数?
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│         分离 Schema 和实现的优势                               │
+│         为什么 AI-backend 要严格验证参数?                       │
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
-│   1. 职责分离                                                │
-│      - schemas/  只关心"函数长什么样"                        │
-│      - functions/ 只关心"函数怎么实现"                       │
+│   1. AI 不保证类型正确                                        │
+│      用户说: "帮我算 10 加 20"                                │
+│      AI 可能返回: { a: "10", b: "20" }  ← 字符串!            │
 │                                                             │
-│   2. 易于维护                                                │
-│      - 修改函数逻辑不影响 Schema                             │
-│      - 修改 Schema 描述不影响函数实现                        │
+│   2. JSON 解析可能失败                                       │
+│      arguments: '{"a": 10, b: 20}'  ← 缺引号,无效 JSON       │
 │                                                             │
-│   3. 便于测试                                                │
-│      - 可以单独测试函数实现                                  │
-│      - 可以单独验证 Schema 格式                              │
+│   3. 防止运行时错误                                          │
+│      sum("10", 20) → "1020"  ← 字符串拼接,不是求和!          │
 │                                                             │
-│   4. 代码复用                                                │
-│      - Schema 可以用于生成文档                               │
-│      - Schema 可以用于前端表单验证                           │
+│   4. 提供清晰的错误反馈                                       │
+│      有验证: "参数必须是数字类型"  ← 明确问题                 │
+│      无验证: "NaN"                   ← 不知道哪里错           │
+│                                                             │
+│   5. 生产环境的稳定性                                         │
+│      验证不只是为了调试,更是为了系统健壮性                      │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 五、测试函数
+## 五、在 AI-backend 架构中使用函数
 
-### 5.1 创建测试文件
+### 5.1 函数调用流程
 
-创建 `test.js`:
+```
+User Request
+     ↓
+Controller (chat.controller.js)
+     ↓
+Validator (chatValidator.js) - 验证 HTTP 请求
+     ↓
+Service (ai.service.js) - 调用 AI Provider
+     ↓
+Adapter (deepseek.adapter.js) - 发送 functions 参数
+     ↓
+AI Provider - 返回 function_call
+     ↓
+【在这里解析并执行 getTime/sum 函数】
+     ↓
+返回结果给 AI,生成最终回复
+```
+
+### 5.2 如何在 AIService 中集成函数
+
+虽然 AI-backend 目前没有完整的函数执行器,但我们可以看到架构如何支持:
 
 ```javascript
-import { getTime } from './functions/getTime.js'
-import { sum } from './functions/sum.js'
-import { getTimeSchema } from './schemas/getTime.schema.js'
-import { sumSchema } from './schemas/sum.schema.js'
+// 在 ai.service.js 中
+async chat(messages, options = {}) {
+  const { functions, ...restOptions } = options
 
-console.log('=== 测试 getTime 函数 ===\n')
+  // 传递 functions 给 Adapter
+  const adapter = factory.get(provider)
+  const result = await adapter.chat(messages, {
+    ...restOptions,
+    functions: functions,  // ← 这里传入 Function Schemas
+  })
 
-// 测试 1: 默认时区
-console.log('测试 1: 默认时区')
-console.log(getTime())
-console.log()
-
-// 测试 2: UTC 时区
-console.log('测试 2: UTC 时区')
-console.log(getTime('UTC'))
-console.log()
-
-// 测试 3: 纽约时区
-console.log('测试 3: 纽约时区')
-console.log(getTime('America/New_York'))
-console.log()
-
-console.log('=== 测试 sum 函数 ===\n')
-
-// 测试 1: 正整数相加
-console.log('测试 1: 正整数相加')
-console.log('sum(10, 20) =', sum(10, 20))
-console.log()
-
-// 测试 2: 负数相加
-console.log('测试 2: 负数相加')
-console.log('sum(-5, 5) =', sum(-5, 5))
-console.log()
-
-// 测试 3: 浮点数相加
-console.log('测试 3: 浮点数相加')
-console.log('sum(3.14, 2.86) =', sum(3.14, 2.86))
-console.log()
-
-// 测试 4: 错误处理
-console.log('测试 4: 错误处理')
-try {
-  sum('10', 20)
-} catch (error) {
-  console.log('✓ 错误被正确捕获:', error.message)
+  return result
 }
-console.log()
-
-console.log('=== 验证 Schema ===\n')
-
-console.log('getTime Schema:')
-console.log(JSON.stringify(getTimeSchema, null, 2))
-console.log()
-
-console.log('sum Schema:')
-console.log(JSON.stringify(sumSchema, null, 2))
 ```
 
-### 5.2 运行测试
+### 5.3 Adapter 如何处理 functions
 
-```bash
-node test.js
-```
+```javascript
+// 在 deepseek.adapter.js 中
+async chat(messages, options = {}) {
+  const { functions, ...restOptions } = options
 
-预期输出:
+  const response = await this.client.chat.completions.create({
+    model: this.model,
+    messages: this.formatMessages(messages),
+    functions: functions,  // ← 传给 DeepSeek API
+    ...restOptions,
+  })
 
-```
-=== 测试 getTime 函数 ===
-
-测试 1: 默认时区
-当前时间 (Asia/Shanghai): 2024-01-26 14:30:45
-
-测试 2: UTC 时区
-当前时间 (UTC): 2024-01-26 06:30:45
-
-测试 3: 纽约时区
-当前时间 (America/New_York): 2024-01-26 01:30:45
-
-=== 测试 sum 函数 ===
-
-测试 1: 正整数相加
-sum(10, 20) = 30
-
-测试 2: 负数相加
-sum(-5, 5) = 0
-
-测试 3: 浮点数相加
-sum(3.14, 2.86) = 6
-
-测试 4: 错误处理
-✓ 错误被正确捕获: 参数必须是数字类型
-
-=== 验证 Schema ===
-
-getTime Schema:
-{
-  "name": "getTime",
-  "description": "获取指定时区的当前时间。如果不指定时区,返回北京时间。",
-  "parameters": {
-    "type": "object",
-    "properties": {
-      "timezone": {
-        "type": "string",
-        "description": "时区标识符,例如: UTC, Asia/Shanghai, America/New_York",
-        "enum": ["UTC", "Asia/Shanghai", "America/New_York"],
-        "default": "Asia/Shanghai"
-      }
-    },
-    "required": []
-  }
-}
-
-sum Schema:
-{
-  "name": "sum",
-  "description": "计算两个数字的和。支持整数和浮点数。",
-  "parameters": {
-    "type": "object",
-    "properties": {
-      "a": {
-        "type": "number",
-        "description": "第一个加数"
-      },
-      "b": {
-        "type": "number",
-        "description": "第二个加数"
-      }
-    },
-    "required": ["a", "b"]
-  }
+  return this.formatResponse(response)
 }
 ```
 
 ---
 
-## 六、函数实现的最佳实践
+## 六、实践练习
 
-### 6.1 参数验证
+### 练习 1: 在本地测试 AI-backend 函数
 
-```javascript
-function goodFunction(param) {
-  // ✓ 总是验证参数类型
-  if (typeof param !== 'string') {
-    throw new Error('param must be a string')
-  }
+```bash
+# 1. 进入项目目录
+cd /Users/jianglin/Desktop/backend/AI-backend
 
-  // ✓ 验证参数值的有效性
-  if (param.length === 0) {
-    throw new Error('param cannot be empty')
-  }
+# 2. 测试 getTime
+node functions/getTime.js
 
-  // 执行实际逻辑
-  return param.toUpperCase()
-}
+# 3. 测试 sum
+node functions/sum.js
+
+# 4. 思考: 这种自测试模式有什么好处?
 ```
 
-### 6.2 错误处理
+### 练习 2: 实现 multiply 函数
 
-```javascript
-function goodFunction() {
-  try {
-    // 可能出错的操作
-    const result = riskyOperation()
-    return result
-  } catch (error) {
-    // ✓ 抛出清晰的错误信息
-    throw new Error(`操作失败: ${error.message}`)
-  }
-}
-```
+在 AI-backend 项目中创建新函数:
 
-### 6.3 返回值格式
+**要求**:
+1. 创建 `functions/multiply.js`
+2. 实现两数相乘功能
+3. 包含完整的参数验证
+4. 实现自测试模式
+5. 创建对应的 `schemas/multiply.schema.js`
 
-```javascript
-// ✓ 返回清晰、一致的格式
-function getWeather(city) {
-  return {
-    city: city,
-    temperature: 25,
-    weather: '晴天',
-    humidity: 60,
-  }
-}
+**参考 sum.js 的实现**。
 
-// ✓ 或者返回格式化的字符串
-function getWeatherString(city) {
-  return `${city}当前温度 25°C,晴天,湿度 60%`
-}
-```
+### 练习 3: 实现 getWeather 函数(模拟数据)
+
+创建一个模拟的天气查询函数:
+
+**要求**:
+1. 创建 `functions/getWeather.js`
+2. 使用内存数据库(对象)存储几个城市的天气
+3. 支持城市参数
+4. 如果城市不存在,抛出清晰的错误
+5. 创建对应的 Schema
 
 ---
 
 ## 七、学习检查清单
 
-完成以下所有项目,说明你已掌握本节内容:
+### 第一层:代码理解
 
-### 第一层:函数实现
+- [ ] 阅读了 AI-backend 的 getTime.js 代码
+- [ ] 阅读了 AI-backend 的 sum.js 代码
+- [ ] 理解了自测试模式的实现
+- [ ] 理解了参数验证的必要性
 
-- [ ] 实现了 getTime 函数,支持不同时区
-- [ ] 实现了 sum 函数,支持数字相加
-- [ ] 函数包含参数验证
-- [ ] 函数包含错误处理
+### 第二层:Schema 对应
 
-### 第二层:Schema 定义
+- [ ] 理解了 getTime Schema 与函数实现的对应
+- [ ] 理解了 sum Schema 与函数实现的对应
+- [ ] 知道如何设计 Schema 的 required 字段
+- [ ] 知道如何使用 enum 限制参数值
 
-- [ ] 为 getTime 定义了正确的 Schema
-- [ ] 为 sum 定义了正确的 Schema
-- [ ] Schema 的 name 与函数名一致
-- [ ] Schema 的 parameters 与函数参数一致
+### 第三层:实践能力
 
-### 第三层:代码组织
-
-- [ ] 创建了合理的目录结构
-- [ ] 分离了函数实现和 Schema 定义
-- [ ] 编写了测试代码
-- [ ] 所有测试都能通过
+- [ ] 成功运行了 getTime 函数测试
+- [ ] 成功运行了 sum 函数测试
+- [ ] 尝试实现了 multiply 函数
+- [ ] 理解了 AI-backend 的函数调用流程
 
 ---
 
-## 八、实践作业
+## 八、常见问题
 
-### 作业 1: 实现 multiply 函数
+### Q1: 为什么 AI-backend 不用 Zod 验证?
 
-**要求**:
-- 功能: 计算两个数的乘积
-- 参数: `a` 和 `b` (必填,number 类型)
-- 返回: 乘积结果
-- 包含参数验证和错误处理
-- 编写对应的 Schema
+**答**: AI-backend 在函数层使用原生验证,在 HTTP 层使用 Joi。不同层次用不同工具:
+- **函数层**: 轻量级原生验证,快速失败
+- **HTTP 层**: Joi 验证请求体,功能更全面
 
-### 作业 2: 实现 formatText 函数
+后续 Step 33 会展示如何引入 Zod 增强类型安全。
 
-**要求**:
-- 功能: 格式化文本
-- 参数:
-  - `text` (必填,string): 要格式化的文本
-  - `format` (必填,enum): 格式类型 (`uppercase`、`lowercase`、`capitalize`)
-- 返回: 格式化后的文本
-- 编写对应的 Schema
+### Q2: 自测试模式的原理是什么?
 
-### 作业 3: 实现 getRandomNumber 函数
+**答**:
+```javascript
+if (import.meta.url === `file://${process.argv[1]}`) {
+  // 这段代码只在直接运行文件时执行
+}
+```
 
-**要求**:
-- 功能: 生成指定范围的随机数
-- 参数:
-  - `min` (必填,number): 最小值
-  - `max` (必填,number): 最大值
-  - `integer` (可选,boolean): 是否返回整数,默认 true
-- 返回: 随机数
-- 包含边界验证(min 必须小于 max)
-- 编写对应的 Schema
+- `import.meta.url`: 当前模块的 URL
+- `process.argv[1]`: 被执行的文件路径
+- 如果两者相等,说明是直接运行,而非被导入
+
+### Q3: 函数应该返回对象还是字符串?
+
+**答**: 看场景:
+- **返回字符串**: AI 容易理解,适合简单信息(如 getTime)
+- **返回对象**: 结构化数据,适合复杂信息(如 getWeather)
+
+AI-backend 的 getTime 返回字符串是简化设计,实际项目中可以返回对象。
 
 ---
 
-## 九、常见问题
+## 九、下一步
 
-### Q1: 函数名必须和 Schema 的 name 完全一致吗?
-
-**答**: 不是必须,但**强烈建议**一致:
-
-```javascript
-// ✓ 推荐:名称一致,清晰易懂
-function sum(a, b) { }
-const sumSchema = { name: 'sum', ... }
-
-// ✗ 不推荐:名称不一致,容易混淆
-function calculateSum(a, b) { }
-const sumSchema = { name: 'sum', ... }
-```
-
-### Q2: 参数验证是必须的吗?
-
-**答**: 不是必须,但**强烈推荐**:
-
-- AI 可能传错类型
-- 用户可能直接调用函数测试
-- 参数验证让函数更健壮
-
-```javascript
-// ✓ 有验证:安全
-function sum(a, b) {
-  if (typeof a !== 'number') throw new Error('a must be number')
-  return a + b
-}
-
-// ✗ 无验证:危险
-function sum(a, b) {
-  return a + b  // 如果 a 是字符串,结果可能出错
-}
-```
-
-### Q3: Schema 中的 default 会自动应用吗?
-
-**答**: 不会自动应用,`default` 只是提示作用:
-
-```javascript
-// Schema 中定义了 default
-parameters: {
-  properties: {
-    timezone: {
-      type: 'string',
-      default: 'Asia/Shanghai'  // 这只是说明,不会自动应用
-    }
-  }
-}
-
-// 实际函数需要自己处理默认值
-function getTime(timezone = 'Asia/Shanghai') {  // ✓ 手动设置默认值
-  // ...
-}
-```
-
----
-
-## 十、下一步学习方向
-
-完成本节后,你已经实现了基础函数和 Schema。接下来你将:
+完成本节后,你已经掌握了企业级函数实现。接下来:
 
 1. **Step 31**: 让模型根据内容自动调用函数
 2. **Step 32**: 调试 function_call → arguments 的 JSON 化
-3. **Step 33**: 加入结构化返回(zod 也可以)
-4. **Step 34**: 做一个"天气查询"demo
-5. **Step 35**: 整理文档
+3. **Step 33**: 使用 Joi/Zod 增强验证
+4. **Step 34**: 构建完整的天气查询 API
+5. **Step 35**: 总结企业级最佳实践
 
 ---
 
-**记住: 函数实现要健壮,Schema 定义要准确,两者保持一致是关键。**
+**记住: 函数实现要健壮,参数验证是第一要务。AI-backend 的代码展示了如何在生产环境中实现可靠的函数。**
