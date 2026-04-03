@@ -1,0 +1,99 @@
+{
+  "id": "week8",
+  "title": "Week 8: 项目级 Agent",
+  "description": "面向真实工程场景，学习权限、diff、确认与任务链，让 Agent 具备可控的项目级执行能力。",
+  "order": 8,
+  "steps": [
+    {
+      "id": "step50",
+      "title": "规划一个“工程师 Agent”架构",
+      "description": "学习规划一个“工程师 Agent”架构，理解其在项目级 Agent中的作用与实践方式。",
+      "docFile": "step50.md",
+      "codeDir": "engineer-agent-arch",
+      "canManual": false,
+      "tags": [
+        "架构",
+        "Agent",
+        "工程化"
+      ]
+    },
+    {
+      "id": "step51",
+      "title": "设置权限控制",
+      "description": "学习设置权限控制，理解其在项目级 Agent中的作用与实践方式。",
+      "docFile": "step51.md",
+      "codeDir": "permission-control",
+      "canManual": false,
+      "tags": [
+        "权限",
+        "安全",
+        "控制"
+      ]
+    },
+    {
+      "id": "step52",
+      "title": "实现文件 diff 输出",
+      "description": "学习实现文件 diff 输出，理解其在项目级 Agent中的作用与实践方式。",
+      "docFile": "step52.md",
+      "codeDir": "file-diff",
+      "canManual": false,
+      "tags": [
+        "Diff",
+        "文件修改",
+        "审查"
+      ]
+    },
+    {
+      "id": "step53",
+      "title": "加入重写文件前的确认机制",
+      "description": "学习加入重写文件前的确认机制，理解其在项目级 Agent中的作用与实践方式。",
+      "docFile": "step53.md",
+      "codeDir": "rewrite-confirm",
+      "canManual": false,
+      "tags": [
+        "确认机制",
+        "重写",
+        "安全"
+      ]
+    },
+    {
+      "id": "step54",
+      "title": "加入任务链（plan → execute → verify）",
+      "description": "学习加入任务链（plan → execute → verify），理解其在项目级 Agent中的作用与实践方式。",
+      "docFile": "step54.md",
+      "codeDir": "task-chain",
+      "canManual": false,
+      "tags": [
+        "Plan",
+        "Execute",
+        "Verify"
+      ]
+    },
+    {
+      "id": "step55",
+      "title": "做一次真实项目测试",
+      "description": "学习做一次真实项目测试，理解其在项目级 Agent中的作用与实践方式。",
+      "docFile": "step55.md",
+      "codeDir": "real-project-test",
+      "canManual": false,
+      "tags": [
+        "实战",
+        "测试",
+        "项目"
+      ]
+    },
+    {
+      "id": "step56",
+      "title": "整理“项目级 Agent”文档",
+      "description": "学习整理“项目级 Agent”文档，理解其在项目级 Agent中的作用与实践方式。",
+      "docFile": "step56.md",
+      "codeDir": "project-agent-docs",
+      "canManual": false,
+      "tags": [
+        "文档",
+        "总结",
+        "Agent"
+      ]
+    }
+  ]
+}

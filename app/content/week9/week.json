@@ -1,0 +1,99 @@
+{
+  "id": "week9",
+  "title": "Week 9: Embedding + 向量存储",
+  "description": "学习 embedding 与向量数据库的核心链路，构建可检索、可过滤、可封装的语义搜索基础设施。",
+  "order": 9,
+  "steps": [
+    {
+      "id": "step57",
+      "title": "学习 embedding 的工作原理",
+      "description": "学习学习 embedding 的工作原理，理解其在Embedding + 向量存储中的作用与实践方式。",
+      "docFile": "step57.md",
+      "codeDir": "embedding-basics",
+      "canManual": false,
+      "tags": [
+        "Embedding",
+        "语义",
+        "原理"
+      ]
+    },
+    {
+      "id": "step58",
+      "title": "用 OpenAI/DeepSeek 做 embedding",
+      "description": "学习用 OpenAI/DeepSeek 做 embedding，理解其在Embedding + 向量存储中的作用与实践方式。",
+      "docFile": "step58.md",
+      "codeDir": "embedding-api",
+      "canManual": false,
+      "tags": [
+        "API",
+        "Embedding",
+        "模型"
+      ]
+    },
+    {
+      "id": "step59",
+      "title": "用本地向量库（比如 chroma）存数据",
+      "description": "学习用本地向量库（比如 chroma）存数据，理解其在Embedding + 向量存储中的作用与实践方式。",
+      "docFile": "step59.md",
+      "codeDir": "vector-store",
+      "canManual": false,
+      "tags": [
+        "Chroma",
+        "向量库",
+        "存储"
+      ]
+    },
+    {
+      "id": "step60",
+      "title": "实现 search 查询",
+      "description": "学习实现 search 查询，理解其在Embedding + 向量存储中的作用与实践方式。",
+      "docFile": "step60.md",
+      "codeDir": "vector-search",
+      "canManual": false,
+      "tags": [
+        "Search",
+        "检索",
+        "相似度"
+      ]
+    },
+    {
+      "id": "step61",
+      "title": "添加相似度过滤",
+      "description": "学习添加相似度过滤，理解其在Embedding + 向量存储中的作用与实践方式。",
+      "docFile": "step61.md",
+      "codeDir": "similarity-filter",
+      "canManual": false,
+      "tags": [
+        "过滤",
+        "阈值",
+        "相似度"
+      ]
+    },
+    {
+      "id": "step62",
+      "title": "封装 embedding service",
+      "description": "学习封装 embedding service，理解其在Embedding + 向量存储中的作用与实践方式。",
+      "docFile": "step62.md",
+      "codeDir": "embedding-service",
+      "canManual": false,
+      "tags": [
+        "Service",
+        "封装",
+        "工程化"
+      ]
+    },
+    {
+      "id": "step63",
+      "title": "整理 demo 数据",
+      "description": "学习整理 demo 数据，理解其在Embedding + 向量存储中的作用与实践方式。",
+      "docFile": "step63.md",
+      "codeDir": "demo-data",
+      "canManual": false,
+      "tags": [
+        "数据",
+        "清洗",
+        "Demo"
+      ]
+    }
+  ]
+}

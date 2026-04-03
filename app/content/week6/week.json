@@ -1,0 +1,99 @@
+{
+  "id": "week6",
+  "title": "Week 6: ReAct 多步 Agent",
+  "description": "学习 ReAct 推理与行动循环，构建具备多步决策、工具调用与任务控制能力的 Agent。",
+  "order": 6,
+  "steps": [
+    {
+      "id": "step36",
+      "title": "理解 ReAct（思维链 + 行动）模式",
+      "description": "学习理解 ReAct（思维链 + 行动）模式，理解其在ReAct 多步 Agent中的作用与实践方式。",
+      "docFile": "step36.md",
+      "codeDir": "react-basics",
+      "canManual": false,
+      "tags": [
+        "ReAct",
+        "思维链",
+        "行动"
+      ]
+    },
+    {
+      "id": "step37",
+      "title": "实现 action → observation → next action 循环",
+      "description": "学习实现 action → observation → next action 循环，理解其在ReAct 多步 Agent中的作用与实践方式。",
+      "docFile": "step37.md",
+      "codeDir": "react-loop",
+      "canManual": false,
+      "tags": [
+        "循环",
+        "Observation",
+        "Action"
+      ]
+    },
+    {
+      "id": "step38",
+      "title": "构建一个能自动搜索 + 再处理的 Agent",
+      "description": "学习构建一个能自动搜索 + 再处理的 Agent，理解其在ReAct 多步 Agent中的作用与实践方式。",
+      "docFile": "step38.md",
+      "codeDir": "search-agent",
+      "canManual": false,
+      "tags": [
+        "搜索",
+        "工具",
+        "Agent"
+      ]
+    },
+    {
+      "id": "step39",
+      "title": "加入多工具选择逻辑",
+      "description": "学习加入多工具选择逻辑，理解其在ReAct 多步 Agent中的作用与实践方式。",
+      "docFile": "step39.md",
+      "codeDir": "tool-selection",
+      "canManual": false,
+      "tags": [
+        "工具选择",
+        "路由",
+        "决策"
+      ]
+    },
+    {
+      "id": "step40",
+      "title": "测试复杂任务（翻译、问答、推理）",
+      "description": "学习测试复杂任务（翻译、问答、推理），理解其在ReAct 多步 Agent中的作用与实践方式。",
+      "docFile": "step40.md",
+      "codeDir": "task-bench",
+      "canManual": false,
+      "tags": [
+        "测试",
+        "推理",
+        "问答"
+      ]
+    },
+    {
+      "id": "step41",
+      "title": "做任务超时、循环限制",
+      "description": "学习做任务超时、循环限制，理解其在ReAct 多步 Agent中的作用与实践方式。",
+      "docFile": "step41.md",
+      "codeDir": "safety-control",
+      "canManual": false,
+      "tags": [
+        "超时",
+        "循环限制",
+        "安全"
+      ]
+    },
+    {
+      "id": "step42",
+      "title": "整理 Agent Demo",
+      "description": "学习整理 Agent Demo，理解其在ReAct 多步 Agent中的作用与实践方式。",
+      "docFile": "step42.md",
+      "codeDir": "agent-demo",
+      "canManual": false,
+      "tags": [
+        "Demo",
+        "总结",
+        "文档"
+      ]
+    }
+  ]
+}

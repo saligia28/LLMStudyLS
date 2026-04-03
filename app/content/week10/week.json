@@ -1,0 +1,99 @@
+{
+  "id": "week10",
+  "title": "Week 10: Chunking",
+  "description": "学习文档切分策略与召回效果之间的关系，构建可实验、可复用的 chunk 工具链。",
+  "order": 10,
+  "steps": [
+    {
+      "id": "step64",
+      "title": "研究 chunk 切分策略（长度、重叠）",
+      "description": "学习研究 chunk 切分策略（长度、重叠），理解其在Chunking中的作用与实践方式。",
+      "docFile": "step64.md",
+      "codeDir": "chunk-strategy",
+      "canManual": false,
+      "tags": [
+        "Chunk",
+        "切分",
+        "重叠"
+      ]
+    },
+    {
+      "id": "step65",
+      "title": "对不同 chunk 长度做实验",
+      "description": "学习对不同 chunk 长度做实验，理解其在Chunking中的作用与实践方式。",
+      "docFile": "step65.md",
+      "codeDir": "chunk-experiment",
+      "canManual": false,
+      "tags": [
+        "实验",
+        "长度",
+        "效果"
+      ]
+    },
+    {
+      "id": "step66",
+      "title": "写一个自动 chunk 工具",
+      "description": "学习写一个自动 chunk 工具，理解其在Chunking中的作用与实践方式。",
+      "docFile": "step66.md",
+      "codeDir": "auto-chunk-tool",
+      "canManual": false,
+      "tags": [
+        "工具",
+        "自动化",
+        "Chunk"
+      ]
+    },
+    {
+      "id": "step67",
+      "title": "加入元数据（文档名、页码）",
+      "description": "学习加入元数据（文档名、页码），理解其在Chunking中的作用与实践方式。",
+      "docFile": "step67.md",
+      "codeDir": "chunk-metadata",
+      "canManual": false,
+      "tags": [
+        "元数据",
+        "页码",
+        "文档"
+      ]
+    },
+    {
+      "id": "step68",
+      "title": "实验 chunk 对召回率影响",
+      "description": "学习实验 chunk 对召回率影响，理解其在Chunking中的作用与实践方式。",
+      "docFile": "step68.md",
+      "codeDir": "recall-test",
+      "canManual": false,
+      "tags": [
+        "召回率",
+        "实验",
+        "评估"
+      ]
+    },
+    {
+      "id": "step69",
+      "title": "优化 chunk 工具",
+      "description": "学习优化 chunk 工具，理解其在Chunking中的作用与实践方式。",
+      "docFile": "step69.md",
+      "codeDir": "chunk-optimize",
+      "canManual": false,
+      "tags": [
+        "优化",
+        "工具",
+        "性能"
+      ]
+    },
+    {
+      "id": "step70",
+      "title": "整理结论",
+      "description": "学习整理结论，理解其在Chunking中的作用与实践方式。",
+      "docFile": "step70.md",
+      "codeDir": "chunk-summary",
+      "canManual": false,
+      "tags": [
+        "总结",
+        "最佳实践",
+        "结论"
+      ]
+    }
+  ]
+}
