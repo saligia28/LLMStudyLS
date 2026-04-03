@@ -2,349 +2,387 @@
 
 ## 学习目标
 
-这一节不只讲概念，而是要把 **做一次真实项目测试** 真的做出来。做完后，你应该能在当前项目里亲手跑通一套最小可工作的 Node + 前端联动示例，而不是停留在“看懂了原理”的温柔幻觉里。
+这一节不再写成“看起来像懂了”的纯讲义，而是直接以你已经实现过的项目 **`/Users/jianglin/Desktop/backend/AI-backend`** 为练习底座，讲清楚 **做一次真实项目测试** 应该怎么落进一套真实 Node 后端工程里。
 
-通过本教程，你将：
+做完本节后，你应该能：
 
-1. 知道这节内容在完整 Agent / RAG / 工程体系中的位置
-2. 在当前项目里补出一个可运行的最小实现
-3. 通过前端页面或接口观察执行结果
-4. 建立后续继续扩展的代码骨架
+1. 说清楚这项能力该落在哪一层（route / controller / service / adapter / utils）
+2. 在 `AI-backend` 现有目录结构下继续扩展，而不是另起炉灶
+3. 按步骤新增文件、修改入口、跑接口、看日志
+4. 为后续 week 的 Agent / RAG / 工具系统打基础
 
-> **本节目标效果：** 选一个 demo 项目任务跑一遍完整工程师 agent 流程。
+> **本节目标：** 拿真实任务跑工程师 Agent 流程。
 
 ---
 
-## 一、先把问题看清楚
+## 一、本节内容应该落到你项目的哪里？
 
-如果只看文字解释，**做一次真实项目测试** 很容易被误解成一个抽象概念；但对前端开发来说，真正有价值的是：
-
-- 我要在哪一层写这段能力？
-- 服务端负责什么？
-- 前端负责展示和触发什么？
-- 最小可运行版本应该长什么样？
-
-所以这一节统一采用一个现实做法：
-
-- **Node / Express**：承担底层能力、工具、Agent 逻辑、检索逻辑
-- **前端页面（当前项目实际为 React）**：承担操作入口、结果展示、日志可视化
-- **文档 codeDir**：放这节的最小可运行示例文件
-
-### 1.1 本节在项目中的推荐落点
+你现在这个项目已经不是初学 demo，而是一个分层比较清楚的后端工程：
 
 ```
-app/
-├── server/
-│   ├── routes/
-│   │   └── llm.js / 新增 xxx.js
-│   ├── services/
-│   │   └── 新增能力 service
-│   └── index.js
+AI-backend/
 ├── src/
-│   ├── pages/
-│   │   └── StepDetail.jsx
-│   └── services/
-│       └── api.js
-└── content/
-    └── week8/
-        ├── docs/step55.md
-        └── code/real-project-test/
+│   ├── routes/
+│   ├── controllers/
+│   ├── services/
+│   ├── adapters/
+│   ├── middleware/
+│   ├── validators/
+│   └── utils/
+├── functions/
+├── schemas/
+└── server.js
 ```
 
-### 1.2 你这一节真正要学会的，不只是 API
+所以学这一节时，不要再问“我要不要新建一个 demo 项目”。答案是不需要。你应该直接在这套工程里继续长能力。
 
-- 学会把一个 AI 能力拆成 **后端执行 + 前端观测** 两部分
-- 学会写 **最小闭环 demo**，不是一上来造大系统
-- 学会留出后面可扩展的结构，而不是一坨塞进一个文件
+### 1.1 本节推荐落点
+
+围绕 **做一次真实项目测试**，建议这样放：
+
+- **routes**：暴露测试接口
+- **controllers**：解析请求、组织调用
+- **services**：承载核心业务逻辑
+- **utils / functions / schemas**：放辅助工具、函数定义、结构约束
+- **adapters**：如果本节涉及模型提供商差异，再往这里下沉
+
+### 1.2 本节真正要学会什么
+
+不是“我知道这个名词是什么意思”，而是：
+
+- 我知道这项能力为什么属于 service 层
+- 我知道怎样给它补一个测试接口
+- 我知道如何把执行日志暴露出来，方便调试
+- 我知道下一步它如何继续接到更大的 Agent 或 RAG 链路里
 
 ---
 
-## 二、代码实践：先搭最小闭环
+## 二、先设计实现方案，再动代码
 
-### 2.1 先准备 code 目录
+### 2.1 本节建议新增 / 修改的文件
 
-在下面目录创建这一节的示例：
-
-```bash
-mkdir -p /Users/jianglin/Desktop/LLMStudyLS/app/content/week8/code/real-project-test
-```
-
-这一节建议至少准备这些文件：
+先不要一上来乱写。建议按下面的文件清单推进：
 
 ```
-week8/code/real-project-test/
-├── README.md
-├── server-demo.js
-├── service.js
-└── client-demo.jsx
+src/
+├── routes/
+│   └── real-task.routes.js          # 新增：本节练习接口
+├── controllers/
+│   └── real-task.controller.js      # 新增：请求入口
+├── services/
+│   └── real-task.service.js         # 新增：核心逻辑
+├── routes/index.js               # 修改：挂载新路由
+└── app.js / server.js            # 通常无需改动，除非你要挂更多中间件
 ```
 
-> 说明：这里的代码是“课程跟练代码”，你可以先在 `content/week*/code` 下独立跑通；确认理解后，再把能力迁移进 `app/server` 和 `app/src`。
+如果本节涉及工具定义或函数调用，还可以继续扩：
 
-### 2.2 第一步：写服务层最小实现
+```
+functions/
+└── real-task.js
 
-创建 `service.js`：
+schemas/
+└── real-task.schema.js
+```
+
+### 2.2 设计原则
+
+这一节建议坚持 4 个原则：
+
+1. **核心逻辑放 service**，不要塞进 controller
+2. **controller 只做请求协调**，不做复杂业务判断
+3. **route 只负责路径和中间件**，别把逻辑写成一锅粥
+4. **先打通最小闭环，再考虑抽象与复用**
+
+这四条很朴素，但很值钱。你后面做 Agent、MCP、RAG 时，能不能不写成事故现场，基本就看它们。
+
+---
+
+## 三、代码实操：在 AI-backend 里把这节能力接进去
+
+### 3.1 第一步：先写 service
+
+创建文件：`src/services/real-task.service.js`
 
 ```js
-export async function runDemoTask(input, options = {}) {
-  const logs = []
+import logger from '../utils/logger.js'
 
-  logs.push({ type: 'thought', content: '收到任务，准备分析' })
-  logs.push({ type: 'action', content: '执行本节对应的核心逻辑' })
+class RealTaskService {
+  async run(payload = {}) {
+    const startTime = Date.now()
+    const logs = []
 
-  const result = {
-    input,
-    mode: 'real-project-test',
-    summary: '这一步的最小能力已经跑通',
-    options,
-  }
+    logs.push({ stage: 'thought', content: '开始分析任务' })
+    logs.push({ stage: 'action', content: '执行 做一次真实项目测试 的核心逻辑' })
 
-  logs.push({ type: 'observation', content: JSON.stringify(result, null, 2) })
+    const result = {
+      ok: true,
+      feature: 'real-task',
+      payload,
+      summary: '做一次真实项目测试 的最小实现已经打通',
+      completedAt: new Date().toISOString(),
+    }
 
-  return { result, logs }
-}
-```
+    logs.push({ stage: 'observation', content: result.summary })
 
-这段代码看起来很朴素，但它有两个好处：
+    logger.info('real-task service completed', {
+      duration: Date.now() - startTime,
+    })
 
-1. 先把 **输入 → 执行 → 输出** 的链路搭起来
-2. 先让前端有东西可展示，再逐步替换成更真实的逻辑
-
-### 2.3 第二步：写一个独立的 Node demo 入口
-
-创建 `server-demo.js`：
-
-```js
-import { runDemoTask } from './service.js'
-
-async function main() {
-  const task = '做一次真实项目测试'
-  const data = await runDemoTask(task, {
-    debug: true,
-    step: 55,
-  })
-
-  console.log('===== DEMO RESULT =====')
-  console.log(JSON.stringify(data, null, 2))
-}
-
-main().catch(err => {
-  console.error('运行失败:', err)
-  process.exit(1)
-})
-```
-
-运行：
-
-```bash
-node /Users/jianglin/Desktop/LLMStudyLS/app/content/week8/code/real-project-test/server-demo.js
-```
-
-你应该先在终端看到一份结构化结果。**先证明底层逻辑活着，再谈前端页面。**
-
-### 2.4 第三步：接入当前项目服务端
-
-如果你要把本节能力接入主项目，推荐在 `app/server/services/` 新建一个 service 文件：
-
-```js
-// app/server/services/real-project-test.service.js
-export async function handleRealProjectTest(payload) {
-  return {
-    ok: true,
-    feature: 'real-project-test',
-    payload,
-    timestamp: Date.now(),
+    return { result, logs }
   }
 }
+
+export default new RealTaskService()
 ```
 
-再增加一个路由：
+这一步的目标很简单：**先把输入、执行、结果、日志结构立起来**。
+
+你别嫌它朴素。真正值钱的是这个骨架，因为后面你只需要不断把“假动作”替换成“真逻辑”。
+
+### 3.2 第二步：补 controller
+
+创建文件：`src/controllers/real-task.controller.js`
 
 ```js
-// app/server/routes/real-project-test.js
+import { success } from '../utils/response.js'
+import realTaskService from '../services/real-task.service.js'
+
+class RealTaskController {
+  async run(req, res) {
+    const data = await realTaskService.run(req.body)
+    return res.json(success(data, '做一次真实项目测试 执行成功'))
+  }
+}
+
+export default new RealTaskController()
+```
+
+为什么这一层要单独保留？因为后面你大概率会在这里做：
+
+- 参数校验结果接入
+- 请求上下文拼装
+- 用户身份 / 权限信息透传
+- 返回结构格式化
+
+如果你一上来全糊进 route，后面很快就会开始骂昨天的自己。
+
+### 3.3 第三步：补 route
+
+创建文件：`src/routes/real-task.routes.js`
+
+```js
 import express from 'express'
-import { handleRealProjectTest } from '../services/real-project-test.service.js'
+import realTaskController from '../controllers/real-task.controller.js'
+import { asyncHandler } from '../utils/asyncHandler.js'
 
 const router = express.Router()
 
-router.post('/', async (req, res) => {
-  try {
-    const data = await handleRealProjectTest(req.body)
-    res.json(data)
-  } catch (error) {
-    res.status(500).json({ error: error.message })
-  }
-})
+router.post('/real-task', asyncHandler(realTaskController.run.bind(realTaskController)))
 
 export default router
 ```
 
-最后在 `app/server/index.js` 里注册路由：
+### 3.4 第四步：挂到总路由
+
+修改文件：`src/routes/index.js`
+
+在顶部新增：
 
 ```js
-import realprojecttestRouter from './routes/real-project-test.js'
-app.use('/api/real-project-test', realprojecttestRouter)
+import realtaskRoutes from './real-task.routes.js'
 ```
 
-### 2.5 第四步：补一个前端操作页
+在路由挂载区新增：
 
-虽然当前项目是 React，不是 Vue，但你的学习目标是“前端工程师能手操”，所以这里必须有页面入口。
+```js
+router.use('/', realtaskRoutes)
+```
 
-创建一个最小 React 组件练手：
+这样本节接口就会进入统一 `/api` 前缀下。
 
-```jsx
-import React, { useState } from 'react'
-import axios from 'axios'
+最终你可以通过下面地址访问：
 
-export default function ClientDemo() {
-  const [loading, setLoading] = useState(false)
-  const [result, setResult] = useState(null)
+```
+POST /api/real-task
+```
 
-  async function run() {
-    setLoading(true)
-    try {
-      const res = await axios.post('http://localhost:3001/api/real-project-test', {
-        prompt: '做一次真实项目测试',
-        source: 'frontend-demo',
-      })
-      setResult(res.data)
-    } finally {
-      setLoading(false)
-    }
+---
+
+## 四、这节能力该怎么“写真”
+
+上面的代码只是最小骨架。真正练手时，你应该把本节主题替换进来。
+
+### 4.1 围绕“做一次真实项目测试”的真实实现方向
+
+你可以按下面方式升级当前 service：
+
+- 如果这一节偏 **Agent / ReAct / MCP**：
+  - 在 `service.run()` 中增加多阶段日志
+  - 把 thought / action / observation 结构化输出
+  - 让 controller 直接返回完整执行过程
+
+- 如果这一节偏 **Embedding / Search / Chunking**：
+  - 在 service 中增加预处理、索引、检索等步骤
+  - 返回中间结果，如 score、chunk 数量、过滤结果
+  - 方便你在接口层先把链路看清楚
+
+### 4.2 推荐你至少保留这些字段
+
+建议统一返回：
+
+```js
+{
+  result: {},
+  logs: [],
+  meta: {
+    duration: 0,
+    feature: 'real-task',
+    step: 55,
   }
-
-  return (
-    <div style={{ padding: 16 }}>
-      <h3>做一次真实项目测试</h3>
-      <button onClick={run} disabled={loading}>
-        {loading ? '运行中...' : '运行本节 Demo'}
-      </button>
-      <pre>{JSON.stringify(result, null, 2)}</pre>
-    </div>
-  )
 }
 ```
 
-如果你不想新建页面，也可以把这类逻辑临时嵌到现有 `StepDetail.jsx` 的实验区里。重点不是页面多漂亮，而是：**你必须点一下按钮就能看到结果**。
+因为后面你做复杂能力时，日志和 meta 会非常有用。没有这些字段，调试会像摸黑走楼梯，节目效果很强，工程体验很差。
 
 ---
 
-## 三、把本节主题做得更像真的
-
-上面的最小闭环跑通后，就要把 `做一次真实项目测试` 的真实语义补进去，而不是永远停在 demo 数据。
-
-### 3.1 本节的强化方向
-
-- **真实输入**：不要只写死 prompt，允许输入任务参数
-- **真实日志**：把 thought / action / observation 或 search / score / chunk 等日志吐给前端
-- **真实错误**：给异常情况留出错误信息，而不是静默失败
-- **真实边界**：加入 timeout、threshold、maxSteps、权限控制之类的限制
-
-### 3.2 这一节你最该练的，不是“复制代码”，而是“替换逻辑”
-
-你可以按下面顺序升级：
-
-1. 先跑通教程给的最小版
-2. 把假数据替换成真逻辑
-3. 把独立 demo 文件迁移到主项目 `server/services`
-4. 给前端补结果展示与错误提示
-5. 最后再考虑抽公共层
-
-这套顺序比较稳。反过来一上来就抽象，十有八九会把自己写进装修队。 
-
----
-
-## 四、针对本节主题的具体实现提示
-
-### 4.1 实现提示
-
-**围绕「做一次真实项目测试」时，建议重点做下面这些事：**
-
-- 明确输入、输出和中间状态
-- 给关键步骤加日志，方便前端展示
-- 把“主流程”放在 service 层，把“HTTP 包装”放在 route 层
-- 让前端能明确看到执行成功、失败和中间结果
-
-### 4.2 你可以怎么验收自己
-
-至少满足下面 4 条，才算这节真的学到了：
-
-- 我能说清楚这节能力属于系统的哪一层
-- 我能在 Node 里单独跑通最小示例
-- 我能在前端触发并看到结果
-- 我能定位一次故障是出在前端、路由还是 service
-
----
-
-## 五、运行与验证
+## 五、如何运行和验证
 
 ### 5.1 启动项目
 
-在 `app/` 目录下执行：
+进入项目目录：
 
 ```bash
+cd /Users/jianglin/Desktop/backend/AI-backend
 npm install
-npm run start:dev
+npm run dev
 ```
 
-如果你只想先看服务端，也可以单独启动：
+如果启动正常，你应该看到类似输出：
 
 ```bash
-npm run server:dev
+🚀 Server ready at http://localhost:3000
 ```
 
-### 5.2 你应该看到什么
+> 端口以你的 `.env` / config 实际配置为准。
 
-- 终端里看到 `服务器运行在 http://localhost:3001`
-- Electron / 前端页面正常启动
-- 打开当前 Step 页面后，文档能加载，代码文件能展示
-- 按教程新建的接口或页面可以被访问或触发
+### 5.2 调接口验证
 
-### 5.3 调试建议
+你可以直接用 curl 或 Apifox / Postman 测试：
 
-- **前端报错**：先看浏览器控制台 / Electron DevTools
-- **接口报错**：看 `server/index.js` 所在终端日志
-- **代码没生效**：确认改动路径是不是在 `app/` 下，而不是写到别的 demo 目录去了
-- **接口 404**：优先检查路由有没有在 `server/index.js` 注册
+```bash
+curl -X POST http://localhost:3000/api/real-task   -H 'Content-Type: application/json'   -d '{
+    "input": "test 做一次真实项目测试",
+    "debug": true
+  }'
+```
 
+### 5.3 预期返回
 
-## 六、常见坑
+如果最小实现成功，通常会看到这样的结构：
 
-### 6.1 最常见的三种翻车姿势
+```json
+{
+  "success": true,
+  "message": "做一次真实项目测试 执行成功",
+  "data": {
+    "result": {
+      "ok": true,
+      "feature": "real-task"
+    },
+    "logs": [
+      { "stage": "thought", "content": "开始分析任务" },
+      { "stage": "action", "content": "执行 做一次真实项目测试 的核心逻辑" },
+      { "stage": "observation", "content": "做一次真实项目测试 的最小实现已经打通" }
+    ]
+  }
+}
+```
 
-1. **只写文档，不写代码**
-   - 读的时候像会了
-   - 关掉页面就只剩空气
+如果你拿不到这个结果，不要急着怀疑模型，先查三件事：
 
-2. **只写后端，不给前端观察入口**
-   - 实际上很难判断系统到底有没有真的工作
-   - 前端开发者最容易在这里学成“我感觉它应该能跑”
-
-3. **一开始就做太大**
-   - 功能名很高级，代码一看像废墟
-   - 先最小闭环，再逐步升级，真的会轻松很多
-
-### 6.2 调试顺序建议
-
-遇到问题时，按这个顺序查：
-
-1. `server-demo.js` 能不能单独跑通
-2. route 能不能通过 Postman / curl 命中
-3. 前端按钮有没有发请求
-4. 页面是不是正确渲染了返回值
+1. `src/routes/index.js` 有没有挂路由
+2. controller 文件名、导入名是否写对
+3. service 有没有正确 export default
 
 ---
 
-## 七、小结
+## 六、结合你现有项目，这一节具体应该怎么练
 
-这一节你不该只记住 **做一次真实项目测试** 的定义，而是应该真的把它做成一个前端能点、后端能跑、日志能看的最小系统。
+### 6.1 最推荐的练法
 
-如果你现在回头看，会发现这节真正教你的不是一段 API，而是一种更靠谱的学习方式：
+不要追求一步到位把这一节做到完美，而是按这个顺序走：
 
-- 先理解
-- 再最小实现
-- 再接主项目
-- 再做前端可视化
-- 最后再谈抽象与优化
+1. **先把最小路由打通**
+2. **再补 service 真逻辑**
+3. **再加日志**
+4. **最后再考虑 validator / schema / function 定义是否下沉**
 
-这条路一点也不花哨，但它很能打。尤其是对前端开发者，特别值钱。
+这是最稳的节奏。先通，再真，再好看。别反过来。
+
+### 6.2 如果你想把这节接进聊天主链路
+
+你现在项目里已经有：
+
+- `chat.routes.js`
+- `chat.controller.js`
+- `ai.service.js`
+- `functionExecutor`
+- `functions/`
+- `schemas/`
+
+所以当本节能力成熟后，可以继续考虑两种接法：
+
+#### 接法一：独立接口
+适合教学和调试，最容易定位问题。
+
+#### 接法二：接入聊天链路
+适合做真正的 Agent / function calling / tool execution。
+
+也就是说，本节先做独立接口是为了学习效率，不是因为它只能独立存在。
+
+---
+
+## 七、常见坑
+
+### 7.1 容易写歪的地方
+
+1. **把所有逻辑都写进 controller**  
+   看起来快，后面改起来会很脏。
+
+2. **一上来就改 chat 主链路**  
+   这很容易把调试复杂度拉满。先独立接口，真的省命。
+
+3. **没有日志**  
+   后面做 Agent / Search / Chunk 时，你会不知道是哪一步错了。
+
+4. **没想清楚这一节能力属于哪层**  
+   结果 route、controller、service 三层职责混乱，最后谁都像打零工的。
+
+### 7.2 建议的调试顺序
+
+出了问题，按这个顺序查：
+
+1. 服务有没有启动
+2. 路由有没有注册
+3. controller 有没有被命中
+4. service 是否正常返回结构
+5. 日志里有没有异常栈
+
+这顺序很土，但很有效。别一出错就先怀疑宇宙射线。
+
+---
+
+## 八、小结
+
+这一节的关键，不是“我又学了一个新名词”，而是：
+
+- 我知道怎样把 **做一次真实项目测试** 放进一套真实后端工程
+- 我知道 route / controller / service 该怎么配合
+- 我知道怎样用最小接口把能力打通
+- 我知道怎样为后续的 Agent、MCP、Embedding、Chunking 铺路
+
+如果你能按这篇文档真的在 `AI-backend` 里敲完一次，这节才算学到了。
+
+否则就还是那种很熟悉的状态：字都认识，项目不会长。
