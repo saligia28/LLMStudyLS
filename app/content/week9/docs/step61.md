@@ -1,388 +1,227 @@
-# Step 61: 添加相似度过滤
+# Step 61: Embedding + 向量存储｜添加相似度过滤
 
 ## 学习目标
 
-这一节不再写成“看起来像懂了”的纯讲义，而是直接以你已经实现过的项目 **`/Users/jianglin/Desktop/backend/AI-backend`** 为练习底座，讲清楚 **添加相似度过滤** 应该怎么落进一套真实 Node 后端工程里。
+这一节的本质问题是：**我们已经召回了一批候选结果，怎样让返回内容既不过于发散，也不过于苛刻？**
 
-做完本节后，你应该能：
+通过本教程，你将：
 
-1. 说清楚这项能力该落在哪一层（route / controller / service / adapter / utils）
-2. 在 `AI-backend` 现有目录结构下继续扩展，而不是另起炉灶
-3. 按步骤新增文件、修改入口、跑接口、看日志
-4. 为后续 week 的 Agent / RAG / 工具系统打基础
+1. 理解 Top-K 和相似度阈值分别在控制什么
+2. 学会用阈值过滤掉明显不相关的候选结果
+3. 明白 precision 和 recall 之间的真实权衡
+4. 了解为什么“固定阈值”不是万能答案，需要结合数据调参
+5. 把过滤逻辑设计成可配置、可测试、可观察的规则
 
-> **本节目标：** 给检索增加分数阈值。
-
----
-
-## 一、本节内容应该落到你项目的哪里？
-
-你现在这个项目已经不是初学 demo，而是一个分层比较清楚的后端工程：
-
-```
-AI-backend/
-├── src/
-│   ├── routes/
-│   ├── controllers/
-│   ├── services/
-│   ├── adapters/
-│   ├── middleware/
-│   ├── validators/
-│   └── utils/
-├── functions/
-├── schemas/
-└── server.js
-```
-
-所以学这一节时，不要再问“我要不要新建一个 demo 项目”。答案是不需要。你应该直接在这套工程里继续长能力。
-
-### 1.1 本节推荐落点
-
-围绕 **添加相似度过滤**，建议这样放：
-
-- **routes**：暴露测试接口
-- **controllers**：解析请求、组织调用
-- **services**：承载核心业务逻辑
-- **utils / functions / schemas**：放辅助工具、函数定义、结构约束
-- **adapters**：如果本节涉及模型提供商差异，再往这里下沉
-
-### 1.2 本节真正要学会什么
-
-不是“我知道这个名词是什么意思”，而是：
-
-- 我知道这项能力为什么属于 service 层
-- 我知道怎样给它补一个测试接口
-- 我知道如何把执行日志暴露出来，方便调试
-- 我知道下一步它如何继续接到更大的 Agent 或 RAG 链路里
+> **本节目标**：把“召回到结果”这一步变得更稳，让检索系统更像一个能上线的功能，而不是演示级 demo。
 
 ---
 
-## 二、先设计实现方案，再动代码
+## 一、为什么需要相似度过滤
 
-### 2.1 本节建议新增 / 修改的文件
+### 1.1 召回到的结果不一定都该返回
 
-先不要一上来乱写。建议按下面的文件清单推进：
+向量检索的特点是“先宽后严”。系统先找出一批可能相关的候选，再决定哪些值得保留。
 
-```
-src/
-├── routes/
-│   └── score-filter.routes.js          # 新增：本节练习接口
-├── controllers/
-│   └── score-filter.controller.js      # 新增：请求入口
-├── services/
-│   └── score-filter.service.js         # 新增：核心逻辑
-├── routes/index.js               # 修改：挂载新路由
-└── app.js / server.js            # 通常无需改动，除非你要挂更多中间件
-```
+如果没有过滤，常见问题会是：
 
-如果本节涉及工具定义或函数调用，还可以继续扩：
+- 结果很多，但真正相关的很少
+- 看起来相近，实际上只是泛泛相关
+- 用户会看到“像对但又没对上”的内容
 
-```
-functions/
-└── score-filter.js
+所以阈值过滤的目标不是“让结果变少”这么简单，而是“让结果更可信”。
 
-schemas/
-└── score-filter.schema.js
-```
+### 1.2 Top-K 和阈值的角色不同
 
-### 2.2 设计原则
+它们解决的是两个不同的问题：
 
-这一节建议坚持 4 个原则：
+- **Top-K**：控制召回多少个候选
+- **阈值**：控制哪些候选有资格留下
 
-1. **核心逻辑放 service**，不要塞进 controller
-2. **controller 只做请求协调**，不做复杂业务判断
-3. **route 只负责路径和中间件**，别把逻辑写成一锅粥
-4. **先打通最小闭环，再考虑抽象与复用**
+你可以把它理解成两道门：
 
-这四条很朴素，但很值钱。你后面做 Agent、MCP、RAG 时，能不能不写成事故现场，基本就看它们。
+1. 先让系统从海量数据里找出一批最像的
+2. 再把明显不够像的踢出去
 
 ---
 
-## 三、代码实操：在 AI-backend 里把这节能力接进去
+## 二、先理解 precision / recall
 
-### 3.1 第一步：先写 service
+### 2.1 精度和召回是什么
 
-创建文件：`src/services/score-filter.service.js`
+如果用最直白的话说：
 
-```js
-import logger from '../utils/logger.js'
+- **Precision（精度）**：返回的结果里，有多少是真的相关
+- **Recall（召回）**：真正相关的内容里，有多少被找出来了
 
-class ScoreFilterService {
-  async run(payload = {}) {
-    const startTime = Date.now()
-    const logs = []
+这两个指标经常是对拉关系：
 
-    logs.push({ stage: 'thought', content: '开始分析任务' })
-    logs.push({ stage: 'action', content: '执行 添加相似度过滤 的核心逻辑' })
+- 阈值太低，召回多，但噪声也多
+- 阈值太高，返回干净，但可能漏掉有用结果
 
-    const result = {
-      ok: true,
-      feature: 'score-filter',
-      payload,
-      summary: '添加相似度过滤 的最小实现已经打通',
-      completedAt: new Date().toISOString(),
-    }
+### 2.2 一个直觉表
 
-    logs.push({ stage: 'observation', content: result.summary })
+| 策略 | 结果数量 | 噪声 | 漏召回 |
+| --- | --- | --- | --- |
+| 低阈值 + 大 Top-K | 多 | 高 | 低 |
+| 高阈值 + 小 Top-K | 少 | 低 | 高 |
+| 中等阈值 + 中等 Top-K | 平衡 | 中 | 中 |
 
-    logger.info('score-filter service completed', {
-      duration: Date.now() - startTime,
-    })
-
-    return { result, logs }
-  }
-}
-
-export default new ScoreFilterService()
-```
-
-这一步的目标很简单：**先把输入、执行、结果、日志结构立起来**。
-
-你别嫌它朴素。真正值钱的是这个骨架，因为后面你只需要不断把“假动作”替换成“真逻辑”。
-
-### 3.2 第二步：补 controller
-
-创建文件：`src/controllers/score-filter.controller.js`
-
-```js
-import { success } from '../utils/response.js'
-import scoreFilterService from '../services/score-filter.service.js'
-
-class ScoreFilterController {
-  async run(req, res) {
-    const data = await scoreFilterService.run(req.body)
-    return res.json(success(data, '添加相似度过滤 执行成功'))
-  }
-}
-
-export default new ScoreFilterController()
-```
-
-为什么这一层要单独保留？因为后面你大概率会在这里做：
-
-- 参数校验结果接入
-- 请求上下文拼装
-- 用户身份 / 权限信息透传
-- 返回结构格式化
-
-如果你一上来全糊进 route，后面很快就会开始骂昨天的自己。
-
-### 3.3 第三步：补 route
-
-创建文件：`src/routes/score-filter.routes.js`
-
-```js
-import express from 'express'
-import scoreFilterController from '../controllers/score-filter.controller.js'
-import { asyncHandler } from '../utils/asyncHandler.js'
-
-const router = express.Router()
-
-router.post('/score-filter', asyncHandler(scoreFilterController.run.bind(scoreFilterController)))
-
-export default router
-```
-
-### 3.4 第四步：挂到总路由
-
-修改文件：`src/routes/index.js`
-
-在顶部新增：
-
-```js
-import scorefilterRoutes from './score-filter.routes.js'
-```
-
-在路由挂载区新增：
-
-```js
-router.use('/', scorefilterRoutes)
-```
-
-这样本节接口就会进入统一 `/api` 前缀下。
-
-最终你可以通过下面地址访问：
-
-```
-POST /api/score-filter
-```
+没有绝对最优参数，只有“更适合你的数据和任务”的参数。
 
 ---
 
-## 四、这节能力该怎么“写真”
+## 三、阈值过滤的基本写法
 
-上面的代码只是最小骨架。真正练手时，你应该把本节主题替换进来。
+### 3.1 先统一结果结构
 
-### 4.1 围绕“添加相似度过滤”的真实实现方向
-
-你可以按下面方式升级当前 service：
-
-- 如果这一节偏 **Agent / ReAct / MCP**：
-  - 在 `service.run()` 中增加多阶段日志
-  - 把 thought / action / observation 结构化输出
-  - 让 controller 直接返回完整执行过程
-
-- 如果这一节偏 **Embedding / Search / Chunking**：
-  - 在 service 中增加预处理、索引、检索等步骤
-  - 返回中间结果，如 score、chunk 数量、过滤结果
-  - 方便你在接口层先把链路看清楚
-
-### 4.2 推荐你至少保留这些字段
-
-建议统一返回：
+假设上一节已经把结果整理成下面这种形状：
 
 ```js
-{
-  result: {},
-  logs: [],
-  meta: {
-    duration: 0,
-    feature: 'score-filter',
-    step: 61,
-  }
+const results = [
+  { document: '如何重置密码', score: 0.93, metadata: {} },
+  { document: '修改头像教程', score: 0.41, metadata: {} },
+  { document: '账号密码找回', score: 0.89, metadata: {} },
+]
+```
+
+### 3.2 最小过滤函数
+
+```js
+function filterByThreshold(results, { minScore = 0.75, topK = 5 } = {}) {
+  return results
+    .filter((item) => item.score >= minScore)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, topK)
 }
 ```
 
-因为后面你做复杂能力时，日志和 meta 会非常有用。没有这些字段，调试会像摸黑走楼梯，节目效果很强，工程体验很差。
+这段逻辑有三个关键点：
 
----
+1. 先过滤掉分数不足的
+2. 再按分数排序
+3. 最后只保留最终要返回的数量
 
-## 五、如何运行和验证
+### 3.3 如果你的库返回的是 distance
 
-### 5.1 启动项目
+如果返回的是 `distance`，那过滤逻辑就要反过来写：
 
-进入项目目录：
-
-```bash
-cd /Users/jianglin/Desktop/backend/AI-backend
-npm install
-npm run dev
-```
-
-如果启动正常，你应该看到类似输出：
-
-```bash
-🚀 Server ready at http://localhost:3000
-```
-
-> 端口以你的 `.env` / config 实际配置为准。
-
-### 5.2 调接口验证
-
-你可以直接用 curl 或 Apifox / Postman 测试：
-
-```bash
-curl -X POST http://localhost:3000/api/score-filter   -H 'Content-Type: application/json'   -d '{
-    "input": "test 添加相似度过滤",
-    "debug": true
-  }'
-```
-
-### 5.3 预期返回
-
-如果最小实现成功，通常会看到这样的结构：
-
-```json
-{
-  "success": true,
-  "message": "添加相似度过滤 执行成功",
-  "data": {
-    "result": {
-      "ok": true,
-      "feature": "score-filter"
-    },
-    "logs": [
-      { "stage": "thought", "content": "开始分析任务" },
-      { "stage": "action", "content": "执行 添加相似度过滤 的核心逻辑" },
-      { "stage": "observation", "content": "添加相似度过滤 的最小实现已经打通" }
-    ]
-  }
+```js
+function filterByDistance(results, { maxDistance = 0.25, topK = 5 } = {}) {
+  return results
+    .filter((item) => item.distance <= maxDistance)
+    .sort((a, b) => a.distance - b.distance)
+    .slice(0, topK)
 }
 ```
 
-如果你拿不到这个结果，不要急着怀疑模型，先查三件事：
-
-1. `src/routes/index.js` 有没有挂路由
-2. controller 文件名、导入名是否写对
-3. service 有没有正确 export default
+所以在做过滤之前，先要搞清楚你的向量库返回的是“越大越好”还是“越小越好”。这个细节非常重要，写反了会直接把检索结果搞乱。
 
 ---
 
-## 六、结合你现有项目，这一节具体应该怎么练
+## 四、阈值不是拍脑袋定的
 
-### 6.1 最推荐的练法
+### 4.1 为什么不能随便写一个 0.8
 
-不要追求一步到位把这一节做到完美，而是按这个顺序走：
+很多人第一次做检索时喜欢直接写一个固定阈值，比如 `0.8`。这通常只是一个起点，不是答案。
 
-1. **先把最小路由打通**
-2. **再补 service 真逻辑**
-3. **再加日志**
-4. **最后再考虑 validator / schema / function 定义是否下沉**
+因为不同因素都会影响分数分布：
 
-这是最稳的节奏。先通，再真，再好看。别反过来。
+- embedding 模型不同
+- 文本长度不同
+- 切分策略不同
+- 语料密度不同
+- 任务类型不同
 
-### 6.2 如果你想把这节接进聊天主链路
+同样是 `0.8`，在 FAQ 场景里可能很合理，在长文档检索里可能就过于严格了。
 
-你现在项目里已经有：
+### 4.2 更靠谱的做法
 
-- `chat.routes.js`
-- `chat.controller.js`
-- `ai.service.js`
-- `functionExecutor`
-- `functions/`
-- `schemas/`
+更合理的流程是：
 
-所以当本节能力成熟后，可以继续考虑两种接法：
+1. 先选一批真实 query
+2. 看返回分数分布
+3. 观察哪些结果是“明显相关”“边界相关”“明显无关”
+4. 再决定阈值范围
 
-#### 接法一：独立接口
-适合教学和调试，最容易定位问题。
+你还可以按场景分层设置：
 
-#### 接法二：接入聊天链路
-适合做真正的 Agent / function calling / tool execution。
-
-也就是说，本节先做独立接口是为了学习效率，不是因为它只能独立存在。
+- FAQ 检索：阈值可以高一点
+- 长文档召回：阈值可以适当低一些
+- 先召回再重排：阈值可以更宽松
 
 ---
 
-## 七、常见坑
+## 五、一个更实用的两段式策略
 
-### 7.1 容易写歪的地方
+### 5.1 先召回，再过滤
 
-1. **把所有逻辑都写进 controller**  
-   看起来快，后面改起来会很脏。
+最常见的做法不是直接拿阈值卡死，而是：
 
-2. **一上来就改 chat 主链路**  
-   这很容易把调试复杂度拉满。先独立接口，真的省命。
+1. 先取 `topK = 20` 的候选
+2. 再按 `minScore` 过滤
+3. 最后只返回前 `topK = 5` 的结果
 
-3. **没有日志**  
-   后面做 Agent / Search / Chunk 时，你会不知道是哪一步错了。
+```js
+function selectFinalResults(results, { minScore = 0.75, topK = 5 } = {}) {
+  const filtered = results
+    .filter((item) => item.score >= minScore)
+    .sort((a, b) => b.score - a.score)
 
-4. **没想清楚这一节能力属于哪层**  
-   结果 route、controller、service 三层职责混乱，最后谁都像打零工的。
+  return filtered.slice(0, topK)
+}
+```
 
-### 7.2 建议的调试顺序
+这比“直接在召回阶段只要 5 个”更稳。因为它给了系统一个缓冲区，可以先多找一些，再决定哪些留下。
 
-出了问题，按这个顺序查：
+### 5.2 阈值和 Top-K 的组合含义
 
-1. 服务有没有启动
-2. 路由有没有注册
-3. controller 有没有被命中
-4. service 是否正常返回结构
-5. 日志里有没有异常栈
-
-这顺序很土，但很有效。别一出错就先怀疑宇宙射线。
+- Top-K 负责“广度”
+- 阈值负责“质量”
+- 两者一起用，才能得到比较稳定的体验
 
 ---
 
-## 八、小结
+## 六、调参时看什么
 
-这一节的关键，不是“我又学了一个新名词”，而是：
+### 6.1 先看错在哪
 
-- 我知道怎样把 **添加相似度过滤** 放进一套真实后端工程
-- 我知道 route / controller / service 该怎么配合
-- 我知道怎样用最小接口把能力打通
-- 我知道怎样为后续的 Agent、MCP、Embedding、Chunking 铺路
+调阈值时，不要只盯着分数，要看结果：
 
-如果你能按这篇文档真的在 `AI-backend` 里敲完一次，这节才算学到了。
+- 用户问的是密码找回，结果却返回了“修改头像”
+- 用户问的是支付问题，结果却返回了“订单列表”
+- 用户问的是 API 用法，结果却返回了泛泛介绍
 
-否则就还是那种很熟悉的状态：字都认识，项目不会长。
+这些都说明当前阈值、切分或者 metadata 策略还有问题。
+
+### 6.2 记录观察日志
+
+建议在过滤前后都记录日志：
+
+```js
+console.log({
+  query,
+  retrievedCount: results.length,
+  passedCount: finalResults.length,
+  minScore,
+})
+```
+
+有了这些信息，你就可以知道：
+
+- 是召回阶段本来就少
+- 还是过滤阶段过滤太狠
+- 还是分数分布本身就不理想
+
+---
+
+## 七、总结
+
+这一节你要真正掌握的，不是“阈值写多少”，而是“阈值和 Top-K 各自控制什么”。
+
+记住这三点：
+
+1. Top-K 控制候选宽度，阈值控制结果质量
+2. precision 和 recall 会互相拉扯，没有一刀切的最佳值
+3. 真正可靠的过滤逻辑，应该可配置、可观测、可随着数据调整
+
+下一节，我们会把这些检索步骤收束成一个更像真实系统的 embedding service，让写入和搜索都通过统一边界完成。

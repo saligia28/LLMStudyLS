@@ -1,388 +1,223 @@
-# Step 69: 优化 chunk 工具
+# Step 69: Chunking｜优化 chunk 工具
 
 ## 学习目标
 
-这一节不再写成“看起来像懂了”的纯讲义，而是直接以你已经实现过的项目 **`/Users/jianglin/Desktop/backend/AI-backend`** 为练习底座，讲清楚 **优化 chunk 工具** 应该怎么落进一套真实 Node 后端工程里。
+这一节要把前面做出来的 chunk 工具，从“能跑”升级成“够稳、够快、够少重复”。
 
-做完本节后，你应该能：
+完成后你应该能：
 
-1. 说清楚这项能力该落在哪一层（route / controller / service / adapter / utils）
-2. 在 `AI-backend` 现有目录结构下继续扩展，而不是另起炉灶
-3. 按步骤新增文件、修改入口、跑接口、看日志
-4. 为后续 week 的 Agent / RAG / 工具系统打基础
+1. 从性能、边界、去重三个方向优化 chunk 工具
+2. 在 rerank 前先做一轮轻量清理
+3. 处理表格、代码块、标题重复等常见边界问题
+4. 知道什么时候该优化工具，什么时候该调整策略
 
-> **本节目标：** 抽象多种 chunk 策略。
-
----
-
-## 一、本节内容应该落到你项目的哪里？
-
-你现在这个项目已经不是初学 demo，而是一个分层比较清楚的后端工程：
-
-```
-AI-backend/
-├── src/
-│   ├── routes/
-│   ├── controllers/
-│   ├── services/
-│   ├── adapters/
-│   ├── middleware/
-│   ├── validators/
-│   └── utils/
-├── functions/
-├── schemas/
-└── server.js
-```
-
-所以学这一节时，不要再问“我要不要新建一个 demo 项目”。答案是不需要。你应该直接在这套工程里继续长能力。
-
-### 1.1 本节推荐落点
-
-围绕 **优化 chunk 工具**，建议这样放：
-
-- **routes**：暴露测试接口
-- **controllers**：解析请求、组织调用
-- **services**：承载核心业务逻辑
-- **utils / functions / schemas**：放辅助工具、函数定义、结构约束
-- **adapters**：如果本节涉及模型提供商差异，再往这里下沉
-
-### 1.2 本节真正要学会什么
-
-不是“我知道这个名词是什么意思”，而是：
-
-- 我知道这项能力为什么属于 service 层
-- 我知道怎样给它补一个测试接口
-- 我知道如何把执行日志暴露出来，方便调试
-- 我知道下一步它如何继续接到更大的 Agent 或 RAG 链路里
+> 真正上线的 chunk 工具，往往不是“切得最花哨”的那个，而是“最少出错、最少重复、最容易解释”的那个。
 
 ---
 
-## 二、先设计实现方案，再动代码
+## 一、先想清楚要优化什么
 
-### 2.1 本节建议新增 / 修改的文件
+优化 chunk 工具，通常不是只优化“切得更准”，还要同时照顾这四件事：
 
-先不要一上来乱写。建议按下面的文件清单推进：
+1. **性能**：切分快不快，能不能处理大文档
+2. **边界**：标题、代码块、表格会不会被切坏
+3. **去重**：重复页眉页脚、重复段落、重叠文本怎么处理
+4. **下游**：chunk 是否适合进入 rerank 和最终 prompt
 
-```
-src/
-├── routes/
-│   └── chunk-opt.routes.js          # 新增：本节练习接口
-├── controllers/
-│   └── chunk-opt.controller.js      # 新增：请求入口
-├── services/
-│   └── chunk-opt.service.js         # 新增：核心逻辑
-├── routes/index.js               # 修改：挂载新路由
-└── app.js / server.js            # 通常无需改动，除非你要挂更多中间件
-```
-
-如果本节涉及工具定义或函数调用，还可以继续扩：
-
-```
-functions/
-└── chunk-opt.js
-
-schemas/
-└── chunk-opt.schema.js
-```
-
-### 2.2 设计原则
-
-这一节建议坚持 4 个原则：
-
-1. **核心逻辑放 service**，不要塞进 controller
-2. **controller 只做请求协调**，不做复杂业务判断
-3. **route 只负责路径和中间件**，别把逻辑写成一锅粥
-4. **先打通最小闭环，再考虑抽象与复用**
-
-这四条很朴素，但很值钱。你后面做 Agent、MCP、RAG 时，能不能不写成事故现场，基本就看它们。
+这四件事不是分开的。比如 overlap 提高了边界稳定性，但也会增加重复；性能优化如果只盯着速度，可能会把结构信息丢掉。
 
 ---
 
-## 三、代码实操：在 AI-backend 里把这节能力接进去
+## 二、性能优化：让工具更适合大文档
 
-### 3.1 第一步：先写 service
+### 2.1 先缓存 token 估算
 
-创建文件：`src/services/chunk-opt.service.js`
+如果每次都重复算 token，文档一大就会慢。
 
 ```js
-import logger from '../utils/logger.js'
+const tokenCache = new Map()
 
-class ChunkOptService {
-  async run(payload = {}) {
-    const startTime = Date.now()
-    const logs = []
+function estimateTokens(text) {
+  if (tokenCache.has(text)) return tokenCache.get(text)
+  const tokens = Math.ceil(text.replace(/\s+/g, ' ').trim().length / 4)
+  tokenCache.set(text, tokens)
+  return tokens
+}
+```
 
-    logs.push({ stage: 'thought', content: '开始分析任务' })
-    logs.push({ stage: 'action', content: '执行 优化 chunk 工具 的核心逻辑' })
+### 2.2 只在必要时做 overlap
 
-    const result = {
-      ok: true,
-      feature: 'chunk-opt',
-      payload,
-      summary: '优化 chunk 工具 的最小实现已经打通',
-      completedAt: new Date().toISOString(),
+不是所有 chunk 都一定要 overlap。比如一个完整表格、一段独立 FAQ，如果本身已经完整，就不必强行加很多重叠。
+
+### 2.3 流式处理大文件
+
+对于特别长的文档，尽量边读边处理，而不是一次性把所有内容都塞进内存。
+
+```text
+读取一段
+  → 归一化
+  → 分块
+  → 合并
+  → 输出
+  → 继续下一段
+```
+
+这类优化特别适合批量入库场景。
+
+---
+
+## 三、去重优化：减少重复召回
+
+Chunking 最常见的副作用之一，就是重复内容太多。
+
+### 3.1 按规范化文本去重
+
+```js
+import crypto from 'node:crypto'
+
+function normalizeForHash(text) {
+  return text
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+}
+
+function hashText(text) {
+  return crypto.createHash('sha1').update(normalizeForHash(text)).digest('hex')
+}
+
+function dedupeChunks(chunks) {
+  const seen = new Set()
+  const result = []
+
+  for (const chunk of chunks) {
+    const key = hashText(chunk.text)
+    if (seen.has(key)) continue
+    seen.add(key)
+    result.push(chunk)
+  }
+
+  return result
+}
+```
+
+### 3.2 什么时候去重最合适
+
+通常在这些节点做去重比较合适：
+
+- 结构切分之后
+- overlap 之后
+- rerank 之前
+
+这样能先保留结构信息，再减少重复噪声。
+
+---
+
+## 四、边界优化：别把结构切坏
+
+### 4.1 标题不要孤零零挂着
+
+如果标题太短，不要单独成块，最好和后面的首段合并。
+
+### 4.2 代码块和表格要完整保留
+
+代码块、表格、列表如果被截断，下游检索和回答都会很难看。
+
+### 4.3 给异常块留 fallback
+
+有些文档没有标准标题，也没有清晰段落。这种情况下，可以退回到：
+
+1. 句子切分
+2. 固定长度切分
+3. 固定长度 + overlap
+
+也就是说，工具要有“优雅降级”的能力。
+
+---
+
+## 五、rerank 前处理：别把重复块一起送进去
+
+如果你后面还要做 rerank，建议在 rerank 之前加一层轻量预处理。
+
+### 5.1 先按来源聚类
+
+同一个文档、同一个 section 的 chunk，不要一次性送太多。
+
+### 5.2 控制每个文档的上限
+
+```js
+function capPerDoc(chunks, maxPerDoc = 3) {
+  const counts = new Map()
+  const result = []
+
+  for (const chunk of chunks) {
+    const docId = chunk.metadata.docId
+    const count = counts.get(docId) ?? 0
+    if (count >= maxPerDoc) continue
+    counts.set(docId, count + 1)
+    result.push(chunk)
+  }
+
+  return result
+}
+```
+
+### 5.3 先去重，再 rerank
+
+顺序建议是：
+
+```text
+召回 Top-K
+  ↓
+去重
+  ↓
+按文档分组或限流
+  ↓
+rerank
+  ↓
+送入 LLM
+```
+
+这样能减少“同一段内容以不同 chunk 形式占满 Top-K”的情况。
+
+---
+
+## 六、一个更完整的优化流水线
+
+```js
+function optimizeChunks(chunks) {
+  const withHash = chunks.map(chunk => ({
+    ...chunk,
+    hash: hashText(chunk.text),
+  }))
+
+  const deduped = dedupeChunks(withHash)
+  const capped = capPerDoc(deduped, 3)
+
+  return capped.sort((a, b) => {
+    if (a.metadata.docId === b.metadata.docId) {
+      return a.metadata.chunkIndex - b.metadata.chunkIndex
     }
-
-    logs.push({ stage: 'observation', content: result.summary })
-
-    logger.info('chunk-opt service completed', {
-      duration: Date.now() - startTime,
-    })
-
-    return { result, logs }
-  }
-}
-
-export default new ChunkOptService()
-```
-
-这一步的目标很简单：**先把输入、执行、结果、日志结构立起来**。
-
-你别嫌它朴素。真正值钱的是这个骨架，因为后面你只需要不断把“假动作”替换成“真逻辑”。
-
-### 3.2 第二步：补 controller
-
-创建文件：`src/controllers/chunk-opt.controller.js`
-
-```js
-import { success } from '../utils/response.js'
-import chunkOptService from '../services/chunk-opt.service.js'
-
-class ChunkOptController {
-  async run(req, res) {
-    const data = await chunkOptService.run(req.body)
-    return res.json(success(data, '优化 chunk 工具 执行成功'))
-  }
-}
-
-export default new ChunkOptController()
-```
-
-为什么这一层要单独保留？因为后面你大概率会在这里做：
-
-- 参数校验结果接入
-- 请求上下文拼装
-- 用户身份 / 权限信息透传
-- 返回结构格式化
-
-如果你一上来全糊进 route，后面很快就会开始骂昨天的自己。
-
-### 3.3 第三步：补 route
-
-创建文件：`src/routes/chunk-opt.routes.js`
-
-```js
-import express from 'express'
-import chunkOptController from '../controllers/chunk-opt.controller.js'
-import { asyncHandler } from '../utils/asyncHandler.js'
-
-const router = express.Router()
-
-router.post('/chunk-opt', asyncHandler(chunkOptController.run.bind(chunkOptController)))
-
-export default router
-```
-
-### 3.4 第四步：挂到总路由
-
-修改文件：`src/routes/index.js`
-
-在顶部新增：
-
-```js
-import chunkoptRoutes from './chunk-opt.routes.js'
-```
-
-在路由挂载区新增：
-
-```js
-router.use('/', chunkoptRoutes)
-```
-
-这样本节接口就会进入统一 `/api` 前缀下。
-
-最终你可以通过下面地址访问：
-
-```
-POST /api/chunk-opt
-```
-
----
-
-## 四、这节能力该怎么“写真”
-
-上面的代码只是最小骨架。真正练手时，你应该把本节主题替换进来。
-
-### 4.1 围绕“优化 chunk 工具”的真实实现方向
-
-你可以按下面方式升级当前 service：
-
-- 如果这一节偏 **Agent / ReAct / MCP**：
-  - 在 `service.run()` 中增加多阶段日志
-  - 把 thought / action / observation 结构化输出
-  - 让 controller 直接返回完整执行过程
-
-- 如果这一节偏 **Embedding / Search / Chunking**：
-  - 在 service 中增加预处理、索引、检索等步骤
-  - 返回中间结果，如 score、chunk 数量、过滤结果
-  - 方便你在接口层先把链路看清楚
-
-### 4.2 推荐你至少保留这些字段
-
-建议统一返回：
-
-```js
-{
-  result: {},
-  logs: [],
-  meta: {
-    duration: 0,
-    feature: 'chunk-opt',
-    step: 69,
-  }
+    return a.metadata.docId.localeCompare(b.metadata.docId)
+  })
 }
 ```
 
-因为后面你做复杂能力时，日志和 meta 会非常有用。没有这些字段，调试会像摸黑走楼梯，节目效果很强，工程体验很差。
+这个函数很朴素，但它说明了一件事：**chunk 工具的优化，不只是切分算法本身，还包括下游使用方式的整理。**
 
 ---
 
-## 五、如何运行和验证
+## 七、小结
 
-### 5.1 启动项目
+优化 chunk 工具的目标，不是让它看起来更高级，而是让它在真实数据上更稳定。
 
-进入项目目录：
+如果你记住一件事，那就是：
 
-```bash
-cd /Users/jianglin/Desktop/backend/AI-backend
-npm install
-npm run dev
+```text
+切分负责质量
+去重负责清洁
+边界负责完整
+rerank 前处理负责控制噪声
 ```
 
-如果启动正常，你应该看到类似输出：
-
-```bash
-🚀 Server ready at http://localhost:3000
-```
-
-> 端口以你的 `.env` / config 实际配置为准。
-
-### 5.2 调接口验证
-
-你可以直接用 curl 或 Apifox / Postman 测试：
-
-```bash
-curl -X POST http://localhost:3000/api/chunk-opt   -H 'Content-Type: application/json'   -d '{
-    "input": "test 优化 chunk 工具",
-    "debug": true
-  }'
-```
-
-### 5.3 预期返回
-
-如果最小实现成功，通常会看到这样的结构：
-
-```json
-{
-  "success": true,
-  "message": "优化 chunk 工具 执行成功",
-  "data": {
-    "result": {
-      "ok": true,
-      "feature": "chunk-opt"
-    },
-    "logs": [
-      { "stage": "thought", "content": "开始分析任务" },
-      { "stage": "action", "content": "执行 优化 chunk 工具 的核心逻辑" },
-      { "stage": "observation", "content": "优化 chunk 工具 的最小实现已经打通" }
-    ]
-  }
-}
-```
-
-如果你拿不到这个结果，不要急着怀疑模型，先查三件事：
-
-1. `src/routes/index.js` 有没有挂路由
-2. controller 文件名、导入名是否写对
-3. service 有没有正确 export default
-
----
-
-## 六、结合你现有项目，这一节具体应该怎么练
-
-### 6.1 最推荐的练法
-
-不要追求一步到位把这一节做到完美，而是按这个顺序走：
-
-1. **先把最小路由打通**
-2. **再补 service 真逻辑**
-3. **再加日志**
-4. **最后再考虑 validator / schema / function 定义是否下沉**
-
-这是最稳的节奏。先通，再真，再好看。别反过来。
-
-### 6.2 如果你想把这节接进聊天主链路
-
-你现在项目里已经有：
-
-- `chat.routes.js`
-- `chat.controller.js`
-- `ai.service.js`
-- `functionExecutor`
-- `functions/`
-- `schemas/`
-
-所以当本节能力成熟后，可以继续考虑两种接法：
-
-#### 接法一：独立接口
-适合教学和调试，最容易定位问题。
-
-#### 接法二：接入聊天链路
-适合做真正的 Agent / function calling / tool execution。
-
-也就是说，本节先做独立接口是为了学习效率，不是因为它只能独立存在。
-
----
-
-## 七、常见坑
-
-### 7.1 容易写歪的地方
-
-1. **把所有逻辑都写进 controller**  
-   看起来快，后面改起来会很脏。
-
-2. **一上来就改 chat 主链路**  
-   这很容易把调试复杂度拉满。先独立接口，真的省命。
-
-3. **没有日志**  
-   后面做 Agent / Search / Chunk 时，你会不知道是哪一步错了。
-
-4. **没想清楚这一节能力属于哪层**  
-   结果 route、controller、service 三层职责混乱，最后谁都像打零工的。
-
-### 7.2 建议的调试顺序
-
-出了问题，按这个顺序查：
-
-1. 服务有没有启动
-2. 路由有没有注册
-3. controller 有没有被命中
-4. service 是否正常返回结构
-5. 日志里有没有异常栈
-
-这顺序很土，但很有效。别一出错就先怀疑宇宙射线。
-
----
-
-## 八、小结
-
-这一节的关键，不是“我又学了一个新名词”，而是：
-
-- 我知道怎样把 **优化 chunk 工具** 放进一套真实后端工程
-- 我知道 route / controller / service 该怎么配合
-- 我知道怎样用最小接口把能力打通
-- 我知道怎样为后续的 Agent、MCP、Embedding、Chunking 铺路
-
-如果你能按这篇文档真的在 `AI-backend` 里敲完一次，这节才算学到了。
-
-否则就还是那种很熟悉的状态：字都认识，项目不会长。
+四者合起来，才是一个可上线的 chunk 工具。

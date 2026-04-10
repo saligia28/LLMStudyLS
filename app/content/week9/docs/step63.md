@@ -1,388 +1,239 @@
-# Step 63: 整理 demo 数据
+# Step 63: Embedding + 向量存储｜整理 demo 数据
 
 ## 学习目标
 
-这一节不再写成“看起来像懂了”的纯讲义，而是直接以你已经实现过的项目 **`/Users/jianglin/Desktop/backend/AI-backend`** 为练习底座，讲清楚 **整理 demo 数据** 应该怎么落进一套真实 Node 后端工程里。
+这一节的本质问题是：**如果要做一个可以反复测试、反复调参、反复验证的向量检索 demo，我们应该准备什么样的数据？**
 
-做完本节后，你应该能：
+通过本教程，你将：
 
-1. 说清楚这项能力该落在哪一层（route / controller / service / adapter / utils）
-2. 在 `AI-backend` 现有目录结构下继续扩展，而不是另起炉灶
-3. 按步骤新增文件、修改入口、跑接口、看日志
-4. 为后续 week 的 Agent / RAG / 工具系统打基础
+1. 理解为什么 demo 数据不能随便抓几段文本就结束
+2. 学会在切分前先做清洗、分段和去重准备
+3. 明白 metadata 该怎么设计，才能支撑后面的过滤和调试
+4. 了解 chunk、doc、version、source 之间的关系
+5. 为下一周更复杂的检索实验或问答实验打好数据基础
 
-> **本节目标：** 整理 demo 数据并验证检索链路。
-
----
-
-## 一、本节内容应该落到你项目的哪里？
-
-你现在这个项目已经不是初学 demo，而是一个分层比较清楚的后端工程：
-
-```
-AI-backend/
-├── src/
-│   ├── routes/
-│   ├── controllers/
-│   ├── services/
-│   ├── adapters/
-│   ├── middleware/
-│   ├── validators/
-│   └── utils/
-├── functions/
-├── schemas/
-└── server.js
-```
-
-所以学这一节时，不要再问“我要不要新建一个 demo 项目”。答案是不需要。你应该直接在这套工程里继续长能力。
-
-### 1.1 本节推荐落点
-
-围绕 **整理 demo 数据**，建议这样放：
-
-- **routes**：暴露测试接口
-- **controllers**：解析请求、组织调用
-- **services**：承载核心业务逻辑
-- **utils / functions / schemas**：放辅助工具、函数定义、结构约束
-- **adapters**：如果本节涉及模型提供商差异，再往这里下沉
-
-### 1.2 本节真正要学会什么
-
-不是“我知道这个名词是什么意思”，而是：
-
-- 我知道这项能力为什么属于 service 层
-- 我知道怎样给它补一个测试接口
-- 我知道如何把执行日志暴露出来，方便调试
-- 我知道下一步它如何继续接到更大的 Agent 或 RAG 链路里
+> **本节目标**：准备一套结构清晰、可追踪、可扩展的 demo 数据，让前面的 embedding、存储和 search 都有真实样本可跑。
 
 ---
 
-## 二、先设计实现方案，再动代码
+## 一、为什么 demo 数据不能随便凑
 
-### 2.1 本节建议新增 / 修改的文件
+### 1.1 只是“能跑”还不够
 
-先不要一上来乱写。建议按下面的文件清单推进：
+一个能帮助你调试检索系统的 demo 数据，至少要满足几个要求：
 
-```
-src/
-├── routes/
-│   └── embedding-demo.routes.js          # 新增：本节练习接口
-├── controllers/
-│   └── embedding-demo.controller.js      # 新增：请求入口
-├── services/
-│   └── embedding-demo.service.js         # 新增：核心逻辑
-├── routes/index.js               # 修改：挂载新路由
-└── app.js / server.js            # 通常无需改动，除非你要挂更多中间件
-```
+- 文本主题清楚
+- 结果可解释
+- 切分后仍然有语义连续性
+- 同时包含“容易召回”的样本和“容易混淆”的样本
 
-如果本节涉及工具定义或函数调用，还可以继续扩：
+如果数据太随意，你会遇到这种情况：
 
-```
-functions/
-└── embedding-demo.js
+- 检索结果看着怪，但你不知道是模型问题、切分问题还是数据问题
+- 过滤阈值怎么调都不稳定
+- 结果无法做对比实验
 
-schemas/
-└── embedding-demo.schema.js
-```
+所以 demo 数据本身，就是检索系统的一部分。
 
-### 2.2 设计原则
+### 1.2 你需要的不是“很多”，而是“有结构”
 
-这一节建议坚持 4 个原则：
+比起海量无结构文本，更重要的是：
 
-1. **核心逻辑放 service**，不要塞进 controller
-2. **controller 只做请求协调**，不做复杂业务判断
-3. **route 只负责路径和中间件**，别把逻辑写成一锅粥
-4. **先打通最小闭环，再考虑抽象与复用**
+- 每个文档都有明确主题
+- 每个 chunk 都能追溯到原文
+- 同一主题下有不同表达方式
+- 不同主题之间存在一定相似度，便于观察边界
 
-这四条很朴素，但很值钱。你后面做 Agent、MCP、RAG 时，能不能不写成事故现场，基本就看它们。
+这会让你后面做 topK、阈值和 metadata 过滤时更容易判断“系统到底对不对”。
 
 ---
 
-## 三、代码实操：在 AI-backend 里把这节能力接进去
+## 二、切分前先做准备
 
-### 3.1 第一步：先写 service
+### 2.1 先清洗，再切分
 
-创建文件：`src/services/embedding-demo.service.js`
+切分前建议先做这几步：
 
-```js
-import logger from '../utils/logger.js'
+1. 去掉明显无关的导航、页脚、重复提示
+2. 统一空白、标点和换行
+3. 保留标题层级和段落结构
+4. 删除重复内容
+5. 标出文档版本和来源
 
-class EmbeddingDemoService {
-  async run(payload = {}) {
-    const startTime = Date.now()
-    const logs = []
+这样做的原因很简单：切分不是把文本切碎，而是把文本切成“仍然有语义边界”的块。
 
-    logs.push({ stage: 'thought', content: '开始分析任务' })
-    logs.push({ stage: 'action', content: '执行 整理 demo 数据 的核心逻辑' })
+### 2.2 用标题和段落作为切分锚点
 
-    const result = {
-      ok: true,
-      feature: 'embedding-demo',
-      payload,
-      summary: '整理 demo 数据 的最小实现已经打通',
-      completedAt: new Date().toISOString(),
-    }
+如果一篇文档本身有结构，优先按结构切：
 
-    logs.push({ stage: 'observation', content: result.summary })
+- 一级标题
+- 二级标题
+- 小节段落
+- 列表块
 
-    logger.info('embedding-demo service completed', {
-      duration: Date.now() - startTime,
-    })
+不要一开始就纯按字符数硬切。那样虽然简单，但会把一个主题说到一半就断掉，影响 embedding 质量。
 
-    return { result, logs }
-  }
-}
+### 2.3 chunk 大小怎么想
 
-export default new EmbeddingDemoService()
-```
+chunk 不应该太大，也不应该太小：
 
-这一步的目标很简单：**先把输入、执行、结果、日志结构立起来**。
+- 太大：一个 chunk 混了多个主题
+- 太小：语义不完整，召回片段化
 
-你别嫌它朴素。真正值钱的是这个骨架，因为后面你只需要不断把“假动作”替换成“真逻辑”。
+比较稳妥的思路是：
 
-### 3.2 第二步：补 controller
-
-创建文件：`src/controllers/embedding-demo.controller.js`
-
-```js
-import { success } from '../utils/response.js'
-import embeddingDemoService from '../services/embedding-demo.service.js'
-
-class EmbeddingDemoController {
-  async run(req, res) {
-    const data = await embeddingDemoService.run(req.body)
-    return res.json(success(data, '整理 demo 数据 执行成功'))
-  }
-}
-
-export default new EmbeddingDemoController()
-```
-
-为什么这一层要单独保留？因为后面你大概率会在这里做：
-
-- 参数校验结果接入
-- 请求上下文拼装
-- 用户身份 / 权限信息透传
-- 返回结构格式化
-
-如果你一上来全糊进 route，后面很快就会开始骂昨天的自己。
-
-### 3.3 第三步：补 route
-
-创建文件：`src/routes/embedding-demo.routes.js`
-
-```js
-import express from 'express'
-import embeddingDemoController from '../controllers/embedding-demo.controller.js'
-import { asyncHandler } from '../utils/asyncHandler.js'
-
-const router = express.Router()
-
-router.post('/embedding-demo', asyncHandler(embeddingDemoController.run.bind(embeddingDemoController)))
-
-export default router
-```
-
-### 3.4 第四步：挂到总路由
-
-修改文件：`src/routes/index.js`
-
-在顶部新增：
-
-```js
-import embeddingdemoRoutes from './embedding-demo.routes.js'
-```
-
-在路由挂载区新增：
-
-```js
-router.use('/', embeddingdemoRoutes)
-```
-
-这样本节接口就会进入统一 `/api` 前缀下。
-
-最终你可以通过下面地址访问：
-
-```
-POST /api/embedding-demo
-```
+- 以“一个可独立解释的语义块”为单位
+- 允许少量重叠，保留上下文
+- 保留标题作为 chunk 的上层语义入口
 
 ---
 
-## 四、这节能力该怎么“写真”
+## 三、metadata 应该怎么设计
 
-上面的代码只是最小骨架。真正练手时，你应该把本节主题替换进来。
+### 3.1 metadata 的作用
 
-### 4.1 围绕“整理 demo 数据”的真实实现方向
+metadata 的作用不是“存点额外信息”，而是让你后面能回答这些问题：
 
-你可以按下面方式升级当前 service：
+- 这个 chunk 来自哪篇文档？
+- 它属于哪个版本？
+- 它是什么类别？
+- 它是否应该参与当前查询？
+- 它召回后要不要优先显示？
 
-- 如果这一节偏 **Agent / ReAct / MCP**：
-  - 在 `service.run()` 中增加多阶段日志
-  - 把 thought / action / observation 结构化输出
-  - 让 controller 直接返回完整执行过程
+### 3.2 推荐字段
 
-- 如果这一节偏 **Embedding / Search / Chunking**：
-  - 在 service 中增加预处理、索引、检索等步骤
-  - 返回中间结果，如 score、chunk 数量、过滤结果
-  - 方便你在接口层先把链路看清楚
+| 字段 | 建议用途 |
+| --- | --- |
+| `docId` | 原始文档 ID |
+| `chunkId` | 切片编号 |
+| `title` | 文档标题 |
+| `section` | 所属章节或小节 |
+| `category` | 业务分类 |
+| `source` | 来源类型或来源文件 |
+| `version` | 数据版本 |
+| `language` | 语言标记 |
+| `tags` | 便于过滤和调试的标签 |
 
-### 4.2 推荐你至少保留这些字段
+这些字段看起来简单，但它们会直接影响后面的过滤、调试和统计。
 
-建议统一返回：
+### 3.3 一个推荐的数据对象
 
 ```js
-{
-  result: {},
-  logs: [],
-  meta: {
-    duration: 0,
-    feature: 'embedding-demo',
-    step: 63,
-  }
+const chunk = {
+  id: 'faq-001:0',
+  text: '如何重置密码：进入设置页后点击“忘记密码”',
+  metadata: {
+    docId: 'faq-001',
+    chunkId: 0,
+    title: '重置密码 FAQ',
+    section: '账户安全',
+    category: 'account',
+    source: 'handbook',
+    version: 'v1',
+    language: 'zh',
+    tags: ['password', 'account'],
+  },
 }
 ```
 
-因为后面你做复杂能力时，日志和 meta 会非常有用。没有这些字段，调试会像摸黑走楼梯，节目效果很强，工程体验很差。
+你会发现，这个结构和前面 step59 的 upsert 结构可以直接对接。也就是说，数据准备、向量化、写入和检索可以形成统一链路。
 
 ---
 
-## 五、如何运行和验证
+## 四、一个可操作的切分流程
 
-### 5.1 启动项目
+### 4.1 先抽取，再切片
 
-进入项目目录：
+可以先把文档整理成结构化对象：
 
-```bash
-cd /Users/jianglin/Desktop/backend/AI-backend
-npm install
-npm run dev
+```js
+const docs = [
+  {
+    id: 'faq-001',
+    title: '重置密码 FAQ',
+    category: 'account',
+    source: 'handbook',
+    version: 'v1',
+    content: '...',
+  },
+]
 ```
 
-如果启动正常，你应该看到类似输出：
+然后再把内容切成 chunk：
 
-```bash
-🚀 Server ready at http://localhost:3000
-```
+```js
+function buildChunks(doc) {
+  const sections = doc.content
+    .split(/\n#{1,3}\s+/)
+    .map((part) => part.trim())
+    .filter(Boolean)
 
-> 端口以你的 `.env` / config 实际配置为准。
-
-### 5.2 调接口验证
-
-你可以直接用 curl 或 Apifox / Postman 测试：
-
-```bash
-curl -X POST http://localhost:3000/api/embedding-demo   -H 'Content-Type: application/json'   -d '{
-    "input": "test 整理 demo 数据",
-    "debug": true
-  }'
-```
-
-### 5.3 预期返回
-
-如果最小实现成功，通常会看到这样的结构：
-
-```json
-{
-  "success": true,
-  "message": "整理 demo 数据 执行成功",
-  "data": {
-    "result": {
-      "ok": true,
-      "feature": "embedding-demo"
-    },
-    "logs": [
-      { "stage": "thought", "content": "开始分析任务" },
-      { "stage": "action", "content": "执行 整理 demo 数据 的核心逻辑" },
-      { "stage": "observation", "content": "整理 demo 数据 的最小实现已经打通" }
-    ]
-  }
+  return sections.flatMap((section, sectionIndex) => {
+    return splitByLength(section, 500, 80).map((text, chunkIndex) => ({
+      id: `${doc.id}:${sectionIndex}:${chunkIndex}`,
+      text,
+      metadata: {
+        docId: doc.id,
+        title: doc.title,
+        sectionIndex,
+        chunkIndex,
+        category: doc.category,
+        source: doc.source,
+        version: doc.version,
+      },
+    }))
+  })
 }
 ```
 
-如果你拿不到这个结果，不要急着怀疑模型，先查三件事：
+这里的 `splitByLength` 只是示意，你可以换成按句子、按 token、按段落的实现。关键是保留结构，不要纯粹按固定长度硬切。
 
-1. `src/routes/index.js` 有没有挂路由
-2. controller 文件名、导入名是否写对
-3. service 有没有正确 export default
+### 4.2 重叠区的意义
 
----
+适当的重叠可以减少“切断上下文”的问题。比如一句话的前半句在一个 chunk，后半句在下一个 chunk，适当重叠就能减少语义断层。
 
-## 六、结合你现有项目，这一节具体应该怎么练
-
-### 6.1 最推荐的练法
-
-不要追求一步到位把这一节做到完美，而是按这个顺序走：
-
-1. **先把最小路由打通**
-2. **再补 service 真逻辑**
-3. **再加日志**
-4. **最后再考虑 validator / schema / function 定义是否下沉**
-
-这是最稳的节奏。先通，再真，再好看。别反过来。
-
-### 6.2 如果你想把这节接进聊天主链路
-
-你现在项目里已经有：
-
-- `chat.routes.js`
-- `chat.controller.js`
-- `ai.service.js`
-- `functionExecutor`
-- `functions/`
-- `schemas/`
-
-所以当本节能力成熟后，可以继续考虑两种接法：
-
-#### 接法一：独立接口
-适合教学和调试，最容易定位问题。
-
-#### 接法二：接入聊天链路
-适合做真正的 Agent / function calling / tool execution。
-
-也就是说，本节先做独立接口是为了学习效率，不是因为它只能独立存在。
+但重叠也不能太大，不然会让索引里出现大量重复信息，增加噪声和存储成本。
 
 ---
 
-## 七、常见坑
+## 五、为了下一周，最好提前准备什么
 
-### 7.1 容易写歪的地方
+### 5.1 准备一组“标准问题”
 
-1. **把所有逻辑都写进 controller**  
-   看起来快，后面改起来会很脏。
+如果你想让 demo 真正可验证，最好还准备一组测试问题：
 
-2. **一上来就改 chat 主链路**  
-   这很容易把调试复杂度拉满。先独立接口，真的省命。
+- 明确问题：应该命中哪个 chunk
+- 边界问题：应该命中多个候选
+- 干扰问题：应该被过滤掉
+- 同义改写问题：应该仍然召回
 
-3. **没有日志**  
-   后面做 Agent / Search / Chunk 时，你会不知道是哪一步错了。
+这样你后面就能很快看出：
 
-4. **没想清楚这一节能力属于哪层**  
-   结果 route、controller、service 三层职责混乱，最后谁都像打零工的。
+- 是 embedding 不够好
+- 还是切分策略不够好
+- 还是阈值设置不合理
 
-### 7.2 建议的调试顺序
+### 5.2 记录版本和变更
 
-出了问题，按这个顺序查：
+数据准备最怕“这批数据和上批数据有什么不同”说不清楚。所以建议保留：
 
-1. 服务有没有启动
-2. 路由有没有注册
-3. controller 有没有被命中
-4. service 是否正常返回结构
-5. 日志里有没有异常栈
+- 数据版本
+- 切分规则版本
+- embedding 模型版本
+- 向量库 collection 名称
 
-这顺序很土，但很有效。别一出错就先怀疑宇宙射线。
+一旦这些信息被记录下来，你就可以复现实验，而不是每次都在猜。
 
 ---
 
-## 八、小结
+## 六、总结
 
-这一节的关键，不是“我又学了一个新名词”，而是：
+这一节你真正要带走的，是“demo 数据不是随便放几篇文章”，而是“为检索系统准备一套可解释、可追踪、可扩展的样本集”。
 
-- 我知道怎样把 **整理 demo 数据** 放进一套真实后端工程
-- 我知道 route / controller / service 该怎么配合
-- 我知道怎样用最小接口把能力打通
-- 我知道怎样为后续的 Agent、MCP、Embedding、Chunking 铺路
+记住这三句话：
 
-如果你能按这篇文档真的在 `AI-backend` 里敲完一次，这节才算学到了。
+1. 先清洗，再切分，再向量化
+2. metadata 是检索系统的第二生命线
+3. demo 数据要能支撑后面的阈值调优和实验对比
 
-否则就还是那种很熟悉的状态：字都认识，项目不会长。
+到这里，Week 9 的主链路就完整了：理解 embedding、调用 API、写入向量库、做 search、加过滤、封装 service、准备 demo 数据。下一步就可以拿这套底座去做更完整的语义检索或检索增强实验。

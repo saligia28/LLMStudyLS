@@ -1,388 +1,278 @@
-# Step 46: 实现执行 shell 命令工具
+# Step 46: MCP 实践｜实现执行 shell 命令工具
 
 ## 学习目标
 
-这一节不再写成“看起来像懂了”的纯讲义，而是直接以你已经实现过的项目 **`/Users/jianglin/Desktop/backend/AI-backend`** 为练习底座，讲清楚 **实现执行 shell 命令工具** 应该怎么落进一套真实 Node 后端工程里。
+这一节要解决的是：**怎样把 shell 执行能力做成一个可审计、可限制、可超时回收的 MCP tool**。它是本地操作 Agent 里最危险的一类工具，所以设计标准必须比文件读写更严格。
 
-做完本节后，你应该能：
+学完这一节，你应该能：
 
-1. 说清楚这项能力该落在哪一层（route / controller / service / adapter / utils）
-2. 在 `AI-backend` 现有目录结构下继续扩展，而不是另起炉灶
-3. 按步骤新增文件、修改入口、跑接口、看日志
-4. 为后续 week 的 Agent / RAG / 工具系统打基础
+1. 设计一个偏安全的 shell 工具 schema
+2. 理解为什么要优先使用 `spawn` 而不是直接拼 shell 字符串
+3. 给命令执行加上白名单、超时、cwd 限制和输出上限
+4. 看懂工具执行日志和错误返回
 
-> **本节目标：** 增加 shell 工具，但限制为白名单命令。
-
----
-
-## 一、本节内容应该落到你项目的哪里？
-
-你现在这个项目已经不是初学 demo，而是一个分层比较清楚的后端工程：
-
-```
-AI-backend/
-├── src/
-│   ├── routes/
-│   ├── controllers/
-│   ├── services/
-│   ├── adapters/
-│   ├── middleware/
-│   ├── validators/
-│   └── utils/
-├── functions/
-├── schemas/
-└── server.js
-```
-
-所以学这一节时，不要再问“我要不要新建一个 demo 项目”。答案是不需要。你应该直接在这套工程里继续长能力。
-
-### 1.1 本节推荐落点
-
-围绕 **实现执行 shell 命令工具**，建议这样放：
-
-- **routes**：暴露测试接口
-- **controllers**：解析请求、组织调用
-- **services**：承载核心业务逻辑
-- **utils / functions / schemas**：放辅助工具、函数定义、结构约束
-- **adapters**：如果本节涉及模型提供商差异，再往这里下沉
-
-### 1.2 本节真正要学会什么
-
-不是“我知道这个名词是什么意思”，而是：
-
-- 我知道这项能力为什么属于 service 层
-- 我知道怎样给它补一个测试接口
-- 我知道如何把执行日志暴露出来，方便调试
-- 我知道下一步它如何继续接到更大的 Agent 或 RAG 链路里
+> **本节主线：** 让模型“能执行有限命令”，而不是“拿到完整终端控制权”。
 
 ---
 
-## 二、先设计实现方案，再动代码
+## 一、先定边界：shell 工具为什么最危险
 
-### 2.1 本节建议新增 / 修改的文件
+### 1.1 shell 工具的用途
 
-先不要一上来乱写。建议按下面的文件清单推进：
+shell 工具通常用于：
 
-```
-src/
-├── routes/
-│   └── mcp-shell.routes.js          # 新增：本节练习接口
-├── controllers/
-│   └── mcp-shell.controller.js      # 新增：请求入口
-├── services/
-│   └── mcp-shell.service.js         # 新增：核心逻辑
-├── routes/index.js               # 修改：挂载新路由
-└── app.js / server.js            # 通常无需改动，除非你要挂更多中间件
-```
+- 运行测试
+- 执行 lint / format
+- 查询 git 状态
+- 触发构建脚本
+- 查看本地环境信息
 
-如果本节涉及工具定义或函数调用，还可以继续扩：
+这些事情都很有用，但它们共同点是：**一旦放开，就能影响整个系统状态**。
 
-```
-functions/
-└── mcp-shell.js
+### 1.2 不推荐的设计
 
-schemas/
-└── mcp-shell.schema.js
-```
-
-### 2.2 设计原则
-
-这一节建议坚持 4 个原则：
-
-1. **核心逻辑放 service**，不要塞进 controller
-2. **controller 只做请求协调**，不做复杂业务判断
-3. **route 只负责路径和中间件**，别把逻辑写成一锅粥
-4. **先打通最小闭环，再考虑抽象与复用**
-
-这四条很朴素，但很值钱。你后面做 Agent、MCP、RAG 时，能不能不写成事故现场，基本就看它们。
-
----
-
-## 三、代码实操：在 AI-backend 里把这节能力接进去
-
-### 3.1 第一步：先写 service
-
-创建文件：`src/services/mcp-shell.service.js`
-
-```js
-import logger from '../utils/logger.js'
-
-class McpShellService {
-  async run(payload = {}) {
-    const startTime = Date.now()
-    const logs = []
-
-    logs.push({ stage: 'thought', content: '开始分析任务' })
-    logs.push({ stage: 'action', content: '执行 实现执行 shell 命令工具 的核心逻辑' })
-
-    const result = {
-      ok: true,
-      feature: 'mcp-shell',
-      payload,
-      summary: '实现执行 shell 命令工具 的最小实现已经打通',
-      completedAt: new Date().toISOString(),
-    }
-
-    logs.push({ stage: 'observation', content: result.summary })
-
-    logger.info('mcp-shell service completed', {
-      duration: Date.now() - startTime,
-    })
-
-    return { result, logs }
-  }
-}
-
-export default new McpShellService()
-```
-
-这一步的目标很简单：**先把输入、执行、结果、日志结构立起来**。
-
-你别嫌它朴素。真正值钱的是这个骨架，因为后面你只需要不断把“假动作”替换成“真逻辑”。
-
-### 3.2 第二步：补 controller
-
-创建文件：`src/controllers/mcp-shell.controller.js`
-
-```js
-import { success } from '../utils/response.js'
-import mcpShellService from '../services/mcp-shell.service.js'
-
-class McpShellController {
-  async run(req, res) {
-    const data = await mcpShellService.run(req.body)
-    return res.json(success(data, '实现执行 shell 命令工具 执行成功'))
-  }
-}
-
-export default new McpShellController()
-```
-
-为什么这一层要单独保留？因为后面你大概率会在这里做：
-
-- 参数校验结果接入
-- 请求上下文拼装
-- 用户身份 / 权限信息透传
-- 返回结构格式化
-
-如果你一上来全糊进 route，后面很快就会开始骂昨天的自己。
-
-### 3.3 第三步：补 route
-
-创建文件：`src/routes/mcp-shell.routes.js`
-
-```js
-import express from 'express'
-import mcpShellController from '../controllers/mcp-shell.controller.js'
-import { asyncHandler } from '../utils/asyncHandler.js'
-
-const router = express.Router()
-
-router.post('/mcp-shell', asyncHandler(mcpShellController.run.bind(mcpShellController)))
-
-export default router
-```
-
-### 3.4 第四步：挂到总路由
-
-修改文件：`src/routes/index.js`
-
-在顶部新增：
-
-```js
-import mcpshellRoutes from './mcp-shell.routes.js'
-```
-
-在路由挂载区新增：
-
-```js
-router.use('/', mcpshellRoutes)
-```
-
-这样本节接口就会进入统一 `/api` 前缀下。
-
-最终你可以通过下面地址访问：
-
-```
-POST /api/mcp-shell
-```
-
----
-
-## 四、这节能力该怎么“写真”
-
-上面的代码只是最小骨架。真正练手时，你应该把本节主题替换进来。
-
-### 4.1 围绕“实现执行 shell 命令工具”的真实实现方向
-
-你可以按下面方式升级当前 service：
-
-- 如果这一节偏 **Agent / ReAct / MCP**：
-  - 在 `service.run()` 中增加多阶段日志
-  - 把 thought / action / observation 结构化输出
-  - 让 controller 直接返回完整执行过程
-
-- 如果这一节偏 **Embedding / Search / Chunking**：
-  - 在 service 中增加预处理、索引、检索等步骤
-  - 返回中间结果，如 score、chunk 数量、过滤结果
-  - 方便你在接口层先把链路看清楚
-
-### 4.2 推荐你至少保留这些字段
-
-建议统一返回：
-
-```js
-{
-  result: {},
-  logs: [],
-  meta: {
-    duration: 0,
-    feature: 'mcp-shell',
-    step: 46,
-  }
-}
-```
-
-因为后面你做复杂能力时，日志和 meta 会非常有用。没有这些字段，调试会像摸黑走楼梯，节目效果很强，工程体验很差。
-
----
-
-## 五、如何运行和验证
-
-### 5.1 启动项目
-
-进入项目目录：
-
-```bash
-cd /Users/jianglin/Desktop/backend/AI-backend
-npm install
-npm run dev
-```
-
-如果启动正常，你应该看到类似输出：
-
-```bash
-🚀 Server ready at http://localhost:3000
-```
-
-> 端口以你的 `.env` / config 实际配置为准。
-
-### 5.2 调接口验证
-
-你可以直接用 curl 或 Apifox / Postman 测试：
-
-```bash
-curl -X POST http://localhost:3000/api/mcp-shell   -H 'Content-Type: application/json'   -d '{
-    "input": "test 实现执行 shell 命令工具",
-    "debug": true
-  }'
-```
-
-### 5.3 预期返回
-
-如果最小实现成功，通常会看到这样的结构：
+不推荐把工具做成这样：
 
 ```json
 {
-  "success": true,
-  "message": "实现执行 shell 命令工具 执行成功",
-  "data": {
-    "result": {
-      "ok": true,
-      "feature": "mcp-shell"
+  "command": "rm -rf /"
+}
+```
+
+也不推荐直接暴露“任意 shell 字符串”：
+
+```json
+{
+  "command": "npm test && cat ~/.ssh/id_rsa"
+}
+```
+
+shell 工具一定要做限制。最好的默认策略是：**命令白名单 + 参数数组 + 沙箱上下文**。
+
+---
+
+## 二、输入输出设计：用结构化参数替代任意字符串
+
+### 2.1 推荐输入 schema
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "command": { "type": "string" },
+    "args": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": []
     },
-    "logs": [
-      { "stage": "thought", "content": "开始分析任务" },
-      { "stage": "action", "content": "执行 实现执行 shell 命令工具 的核心逻辑" },
-      { "stage": "observation", "content": "实现执行 shell 命令工具 的最小实现已经打通" }
-    ]
+    "cwd": { "type": "string" },
+    "timeoutMs": { "type": "integer", "minimum": 100, "maximum": 300000, "default": 30000 },
+    "env": { "type": "object" },
+    "captureStderr": { "type": "boolean", "default": true }
+  },
+  "required": ["command"]
+}
+```
+
+这里有两个关键点：
+
+- `command` 和 `args` 分开，尽量避免 shell 注入
+- `cwd` 必须受限于 workspace，不能让模型跳到任意目录
+
+### 2.2 推荐输出结构
+
+```json
+{
+  "ok": true,
+  "command": "npm",
+  "args": ["test"],
+  "exitCode": 0,
+  "stdout": "passed 12 tests",
+  "stderr": "",
+  "meta": {
+    "pid": 12345,
+    "durationMs": 1842,
+    "timedOut": false,
+    "truncated": false
   }
 }
 ```
 
-如果你拿不到这个结果，不要急着怀疑模型，先查三件事：
+失败时，也要保持结构统一：
 
-1. `src/routes/index.js` 有没有挂路由
-2. controller 文件名、导入名是否写对
-3. service 有没有正确 export default
+```json
+{
+  "ok": false,
+  "error": {
+    "type": "CommandDenied",
+    "message": "Command is not in the allowlist"
+  }
+}
+```
 
----
-
-## 六、结合你现有项目，这一节具体应该怎么练
-
-### 6.1 最推荐的练法
-
-不要追求一步到位把这一节做到完美，而是按这个顺序走：
-
-1. **先把最小路由打通**
-2. **再补 service 真逻辑**
-3. **再加日志**
-4. **最后再考虑 validator / schema / function 定义是否下沉**
-
-这是最稳的节奏。先通，再真，再好看。别反过来。
-
-### 6.2 如果你想把这节接进聊天主链路
-
-你现在项目里已经有：
-
-- `chat.routes.js`
-- `chat.controller.js`
-- `ai.service.js`
-- `functionExecutor`
-- `functions/`
-- `schemas/`
-
-所以当本节能力成熟后，可以继续考虑两种接法：
-
-#### 接法一：独立接口
-适合教学和调试，最容易定位问题。
-
-#### 接法二：接入聊天链路
-适合做真正的 Agent / function calling / tool execution。
-
-也就是说，本节先做独立接口是为了学习效率，不是因为它只能独立存在。
+这样 client 才能基于错误类型做后续决策，而不是只看一段字符串。
 
 ---
 
-## 七、常见坑
+## 三、代码实现：白名单 + `spawn` + 超时回收
 
-### 7.1 容易写歪的地方
+### 3.1 一个安全的最小实现
 
-1. **把所有逻辑都写进 controller**  
-   看起来快，后面改起来会很脏。
+```js
+import { spawn } from 'node:child_process'
+import path from 'node:path'
 
-2. **一上来就改 chat 主链路**  
-   这很容易把调试复杂度拉满。先独立接口，真的省命。
+const ALLOWLIST = new Map([
+  ['npm', [['test'], ['run', 'lint']]],
+  ['git', [['status'], ['diff', '--stat']]],
+  ['node', [['--version']]]
+])
 
-3. **没有日志**  
-   后面做 Agent / Search / Chunk 时，你会不知道是哪一步错了。
+function isAllowed(command, args) {
+  const allowedArgs = ALLOWLIST.get(command)
+  if (!allowedArgs) return false
+  return allowedArgs.some((pattern) =>
+    pattern.length === args.length && pattern.every((value, index) => value === args[index])
+  )
+}
 
-4. **没想清楚这一节能力属于哪层**  
-   结果 route、controller、service 三层职责混乱，最后谁都像打零工的。
+export async function shellTool(input, context) {
+  const cwd = path.resolve(context.workspaceRoot, input.cwd ?? '.')
+  if (!cwd.startsWith(context.workspaceRoot + path.sep)) {
+    throw new Error('cwd outside workspace is not allowed')
+  }
 
-### 7.2 建议的调试顺序
+  const args = input.args ?? []
+  if (!isAllowed(input.command, args)) {
+    throw new Error('Command is not in the allowlist')
+  }
 
-出了问题，按这个顺序查：
+  return await new Promise((resolve) => {
+    const startedAt = Date.now()
+    const child = spawn(input.command, args, {
+      cwd,
+      env: {
+        ...process.env,
+        ...(input.env ?? {}),
+        PATH: process.env.PATH
+      },
+      shell: false
+    })
 
-1. 服务有没有启动
-2. 路由有没有注册
-3. controller 有没有被命中
-4. service 是否正常返回结构
-5. 日志里有没有异常栈
+    let stdout = ''
+    let stderr = ''
+    let finished = false
+    const timer = setTimeout(() => {
+      if (finished) return
+      finished = true
+      child.kill('SIGKILL')
+      resolve({
+        ok: false,
+        error: { type: 'Timeout', message: 'Command timed out' }
+      })
+    }, input.timeoutMs ?? 30000)
 
-这顺序很土，但很有效。别一出错就先怀疑宇宙射线。
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString()
+      if (stdout.length > 10000) stdout = stdout.slice(0, 10000)
+    })
+
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString()
+      if (stderr.length > 10000) stderr = stderr.slice(0, 10000)
+    })
+
+    child.on('close', (code) => {
+      if (finished) return
+      finished = true
+      clearTimeout(timer)
+      resolve({
+        ok: code === 0,
+        command: input.command,
+        args,
+        exitCode: code,
+        stdout,
+        stderr,
+        meta: { pid: child.pid, timedOut: false, durationMs: Date.now() - startedAt }
+      })
+    })
+  })
+}
+```
+
+### 3.2 为什么要用 `spawn`
+
+`spawn` 直接执行命令和参数数组，不需要通过 shell 解析整段字符串，因此：
+
+- 更容易限制参数
+- 更不容易发生注入
+- 更适合记录结构化日志
+- 更容易和 allowlist 配合
+
+如果必须支持 shell 语法，建议显式拆成另一类更危险的工具，而不是混在普通执行器里。
+
+### 3.3 tool definition 的建议字段
+
+```js
+registry.register({
+  name: 'run_command',
+  description: 'Run a limited shell command inside the workspace sandbox',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      command: { type: 'string' },
+      args: { type: 'array', items: { type: 'string' } },
+      cwd: { type: 'string' },
+      timeoutMs: { type: 'integer' }
+    },
+    required: ['command']
+  },
+  meta: {
+    sideEffect: 'exec',
+    permission: 'workspace-exec',
+    requiresConfirmation: true,
+    riskLevel: 'high'
+  },
+  handler: shellTool
+})
+```
 
 ---
 
-## 八、小结
+## 四、调试和安全：shell 工具最容易出事故的地方
 
-这一节的关键，不是“我又学了一个新名词”，而是：
+### 4.1 必做控制
 
-- 我知道怎样把 **实现执行 shell 命令工具** 放进一套真实后端工程
-- 我知道 route / controller / service 该怎么配合
-- 我知道怎样用最小接口把能力打通
-- 我知道怎样为后续的 Agent、MCP、Embedding、Chunking 铺路
+1. **命令白名单**：只允许已知命令
+2. **参数白名单**：命令参数也要限制
+3. **cwd 限制**：只能在 workspace 内执行
+4. **超时回收**：防止卡住
+5. **输出截断**：防止上下文被日志淹没
+6. **环境清洗**：不要把敏感变量随便暴露给子进程
 
-如果你能按这篇文档真的在 `AI-backend` 里敲完一次，这节才算学到了。
+### 4.2 常见错误怎么判断
 
-否则就还是那种很熟悉的状态：字都认识，项目不会长。
+- `Command not found`：通常是 PATH 配置或者白名单命令名写错
+- `Exit code != 0`：先看 `stderr`，再看是不是测试本身失败
+- `Timed out`：优先怀疑命令本身太慢，不要先改模型
+- 输出太多：说明这个命令不适合直接喂给模型，应该换成更窄的命令
+
+### 4.3 安全建议
+
+shell 工具不应该默认开放给所有 Agent。
+
+更合理的做法是：
+
+- 低风险 Agent 只能读文件
+- 中风险 Agent 可以写入指定目录
+- 高风险 Agent 才能申请 shell 执行
+
+这不是“保守”，而是本地自动化系统里最基本的权限分层。
+
+---
+
+## 五、小结
+
+shell 工具是本周最接近“真正自动化”的能力，但它也是最容易越界的能力。真正可用的设计，不是把终端能力一次性全给模型，而是让模型在**白名单、沙箱、超时和审计**的约束下做有限执行。
+
+下一节我们会把这些单个工具串起来，做成一个真正能发现、注册、调用的 MCP registry。

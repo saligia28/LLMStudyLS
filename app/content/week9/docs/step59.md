@@ -1,388 +1,231 @@
-# Step 59: 用本地向量库（比如 chroma）存数据
+# Step 59: Embedding + 向量存储｜用本地向量库（比如 chroma）存数据
 
 ## 学习目标
 
-这一节不再写成“看起来像懂了”的纯讲义，而是直接以你已经实现过的项目 **`/Users/jianglin/Desktop/backend/AI-backend`** 为练习底座，讲清楚 **用本地向量库（比如 chroma）存数据** 应该怎么落进一套真实 Node 后端工程里。
+这一节的本质问题是：**当我们已经拿到了 embedding，应该怎样把它们组织成一个可增量更新、可检索、可带过滤条件的数据集？**
 
-做完本节后，你应该能：
+通过本教程，你将：
 
-1. 说清楚这项能力该落在哪一层（route / controller / service / adapter / utils）
-2. 在 `AI-backend` 现有目录结构下继续扩展，而不是另起炉灶
-3. 按步骤新增文件、修改入口、跑接口、看日志
-4. 为后续 week 的 Agent / RAG / 工具系统打基础
+1. 理解本地向量库的数据模型：id、vector、document、metadata 各自负责什么
+2. 明白为什么 collection / namespace / index 这类概念对检索系统很重要
+3. 学会用 upsert 思维写入向量，而不是只会一次性插入
+4. 了解 metadata 为什么不是“可有可无”，而是后面过滤和调试的基础
+5. 为下一节的 search 查询准备稳定的数据底座
 
-> **本节目标：** 先用本地 JSON / 内存索引模拟向量库。
-
----
-
-## 一、本节内容应该落到你项目的哪里？
-
-你现在这个项目已经不是初学 demo，而是一个分层比较清楚的后端工程：
-
-```
-AI-backend/
-├── src/
-│   ├── routes/
-│   ├── controllers/
-│   ├── services/
-│   ├── adapters/
-│   ├── middleware/
-│   ├── validators/
-│   └── utils/
-├── functions/
-├── schemas/
-└── server.js
-```
-
-所以学这一节时，不要再问“我要不要新建一个 demo 项目”。答案是不需要。你应该直接在这套工程里继续长能力。
-
-### 1.1 本节推荐落点
-
-围绕 **用本地向量库（比如 chroma）存数据**，建议这样放：
-
-- **routes**：暴露测试接口
-- **controllers**：解析请求、组织调用
-- **services**：承载核心业务逻辑
-- **utils / functions / schemas**：放辅助工具、函数定义、结构约束
-- **adapters**：如果本节涉及模型提供商差异，再往这里下沉
-
-### 1.2 本节真正要学会什么
-
-不是“我知道这个名词是什么意思”，而是：
-
-- 我知道这项能力为什么属于 service 层
-- 我知道怎样给它补一个测试接口
-- 我知道如何把执行日志暴露出来，方便调试
-- 我知道下一步它如何继续接到更大的 Agent 或 RAG 链路里
+> **本节目标**：把向量真正放进一个可重复写入、可持续更新的存储结构里。
 
 ---
 
-## 二、先设计实现方案，再动代码
+## 一、向量库到底存什么
 
-### 2.1 本节建议新增 / 修改的文件
+### 1.1 不只是“存一串数字”
 
-先不要一上来乱写。建议按下面的文件清单推进：
+一个可用的向量检索记录，通常不只有 vector。它至少应该包含：
 
-```
-src/
-├── routes/
-│   └── vector-store.routes.js          # 新增：本节练习接口
-├── controllers/
-│   └── vector-store.controller.js      # 新增：请求入口
-├── services/
-│   └── vector-store.service.js         # 新增：核心逻辑
-├── routes/index.js               # 修改：挂载新路由
-└── app.js / server.js            # 通常无需改动，除非你要挂更多中间件
-```
+| 字段 | 作用 |
+| --- | --- |
+| `id` | 这条记录的唯一标识，决定能不能稳定更新 |
+| `vector` | 文本的向量表示，用于相似度计算 |
+| `document` | 原始文本或切片文本，方便返回给用户 |
+| `metadata` | 业务过滤、追踪来源、调试排查的附加信息 |
 
-如果本节涉及工具定义或函数调用，还可以继续扩：
+只存向量会让你后面很难解释“这个结果来自哪里、属于哪一类、为什么被召回”。所以真正实用的向量库，一定是“向量 + 文本 + 元数据”的组合体。
 
-```
-functions/
-└── vector-store.js
+### 1.2 为什么需要 collection
 
-schemas/
-└── vector-store.schema.js
-```
+你可以把 collection 理解成“一个命名清晰、语义一致的向量集合”。比如：
 
-### 2.2 设计原则
+- `faq_docs`
+- `product_manual`
+- `week9_demo`
 
-这一节建议坚持 4 个原则：
+这样做的好处是：
 
-1. **核心逻辑放 service**，不要塞进 controller
-2. **controller 只做请求协调**，不做复杂业务判断
-3. **route 只负责路径和中间件**，别把逻辑写成一锅粥
-4. **先打通最小闭环，再考虑抽象与复用**
+- 不同数据集不会互相污染
+- 索引和检索范围更明确
+- 后续做实验时可以平行比较不同集合
 
-这四条很朴素，但很值钱。你后面做 Agent、MCP、RAG 时，能不能不写成事故现场，基本就看它们。
+如果把所有向量扔进一个大池子，调试会非常痛苦。
 
 ---
 
-## 三、代码实操：在 AI-backend 里把这节能力接进去
+## 二、为什么 upsert 比 insert 更适合索引场景
 
-### 3.1 第一步：先写 service
+### 2.1 insert 的问题
 
-创建文件：`src/services/vector-store.service.js`
+如果你只会 insert，那么每次文档更新时就很麻烦：
 
-```js
-import logger from '../utils/logger.js'
+- 旧向量要先删
+- 新向量要重新加
+- 文档切分变化后，id 可能对不上
 
-class VectorStoreService {
-  async run(payload = {}) {
-    const startTime = Date.now()
-    const logs = []
+这种流程一旦数据量大，就很容易失控。
 
-    logs.push({ stage: 'thought', content: '开始分析任务' })
-    logs.push({ stage: 'action', content: '执行 用本地向量库（比如 chroma）存数据 的核心逻辑' })
+### 2.2 upsert 的思路
 
-    const result = {
-      ok: true,
-      feature: 'vector-store',
-      payload,
-      summary: '用本地向量库（比如 chroma）存数据 的最小实现已经打通',
-      completedAt: new Date().toISOString(),
-    }
+upsert = insert + update。也就是说：
 
-    logs.push({ stage: 'observation', content: result.summary })
+- id 不存在时，新增
+- id 已存在时，覆盖更新
 
-    logger.info('vector-store service completed', {
-      duration: Date.now() - startTime,
-    })
+对于知识库索引来说，这非常重要，因为文档本来就会变：
 
-    return { result, logs }
-  }
-}
+- 内容被修订
+- 切片策略被调整
+- metadata 被补充
+- 模型版本被切换
 
-export default new VectorStoreService()
-```
+用 upsert，你可以把“重建索引”变成“增量修订索引”。
 
-这一步的目标很简单：**先把输入、执行、结果、日志结构立起来**。
+### 2.3 一个推荐的 id 方案
 
-你别嫌它朴素。真正值钱的是这个骨架，因为后面你只需要不断把“假动作”替换成“真逻辑”。
-
-### 3.2 第二步：补 controller
-
-创建文件：`src/controllers/vector-store.controller.js`
+建议把 id 设计成可追踪的组合键：
 
 ```js
-import { success } from '../utils/response.js'
-import vectorStoreService from '../services/vector-store.service.js'
-
-class VectorStoreController {
-  async run(req, res) {
-    const data = await vectorStoreService.run(req.body)
-    return res.json(success(data, '用本地向量库（比如 chroma）存数据 执行成功'))
-  }
-}
-
-export default new VectorStoreController()
+`${docId}:${chunkIndex}`
 ```
 
-为什么这一层要单独保留？因为后面你大概率会在这里做：
+比如：
 
-- 参数校验结果接入
-- 请求上下文拼装
-- 用户身份 / 权限信息透传
-- 返回结构格式化
+- `faq-001:0`
+- `faq-001:1`
+- `doc-2024-03:2`
 
-如果你一上来全糊进 route，后面很快就会开始骂昨天的自己。
+这种 id 结构有几个好处：
 
-### 3.3 第三步：补 route
-
-创建文件：`src/routes/vector-store.routes.js`
-
-```js
-import express from 'express'
-import vectorStoreController from '../controllers/vector-store.controller.js'
-import { asyncHandler } from '../utils/asyncHandler.js'
-
-const router = express.Router()
-
-router.post('/vector-store', asyncHandler(vectorStoreController.run.bind(vectorStoreController)))
-
-export default router
-```
-
-### 3.4 第四步：挂到总路由
-
-修改文件：`src/routes/index.js`
-
-在顶部新增：
-
-```js
-import vectorstoreRoutes from './vector-store.routes.js'
-```
-
-在路由挂载区新增：
-
-```js
-router.use('/', vectorstoreRoutes)
-```
-
-这样本节接口就会进入统一 `/api` 前缀下。
-
-最终你可以通过下面地址访问：
-
-```
-POST /api/vector-store
-```
+- 可以直接定位某个文档的某个切片
+- 改写时容易精确覆盖
+- 方便排查召回结果来自哪个 chunk
 
 ---
 
-## 四、这节能力该怎么“写真”
+## 三、一个最小的本地向量库数据模型
 
-上面的代码只是最小骨架。真正练手时，你应该把本节主题替换进来。
+### 3.1 记录形态
 
-### 4.1 围绕“用本地向量库（比如 chroma）存数据”的真实实现方向
-
-你可以按下面方式升级当前 service：
-
-- 如果这一节偏 **Agent / ReAct / MCP**：
-  - 在 `service.run()` 中增加多阶段日志
-  - 把 thought / action / observation 结构化输出
-  - 让 controller 直接返回完整执行过程
-
-- 如果这一节偏 **Embedding / Search / Chunking**：
-  - 在 service 中增加预处理、索引、检索等步骤
-  - 返回中间结果，如 score、chunk 数量、过滤结果
-  - 方便你在接口层先把链路看清楚
-
-### 4.2 推荐你至少保留这些字段
-
-建议统一返回：
+下面是一个推荐的数据形态：
 
 ```js
-{
-  result: {},
-  logs: [],
-  meta: {
-    duration: 0,
-    feature: 'vector-store',
-    step: 59,
-  }
+const record = {
+  id: 'faq-001:0',
+  document: '如何重置密码：进入设置页后点击“忘记密码”',
+  vector: [0.12, -0.03, 0.87, ...],
+  metadata: {
+    docId: 'faq-001',
+    chunkIndex: 0,
+    title: '重置密码 FAQ',
+    category: 'account',
+    source: 'handbook',
+    version: 'v1',
+    language: 'zh',
+    tags: ['account', 'password'],
+  },
 }
 ```
 
-因为后面你做复杂能力时，日志和 meta 会非常有用。没有这些字段，调试会像摸黑走楼梯，节目效果很强，工程体验很差。
+这里的 metadata 不是摆设，它决定了你后面能不能做这些事：
+
+- 只查某个类别
+- 只看某个版本
+- 只返回某个来源的数据
+- 只过滤某些标签
+
+### 3.2 如果你用的是 Chroma 风格接口
+
+很多本地向量库的写入接口都长得很像：
+
+```js
+await collection.upsert({
+  ids: records.map((item) => item.id),
+  embeddings: records.map((item) => item.vector),
+  documents: records.map((item) => item.document),
+  metadatas: records.map((item) => item.metadata),
+})
+```
+
+这一类接口的关键点是：
+
+- 四个数组必须严格对齐
+- id、文本、向量、metadata 不能错位
+- 更新时用同样的 id 就能覆盖旧数据
+
+### 3.3 如果你先做一个内存版
+
+在真正接 Chroma 之前，你也可以先用 `Map` 模拟 upsert：
+
+```js
+const memoryIndex = new Map()
+
+function upsertRecords(records) {
+  for (const record of records) {
+    memoryIndex.set(record.id, record)
+  }
+}
+
+function getRecord(id) {
+  return memoryIndex.get(id)
+}
+```
+
+这样做的意义是先把“数据形状”跑通。等你以后换成真正的向量库，只需要替换底层存储实现，不需要重写上层数据组织方式。
 
 ---
 
-## 五、如何运行和验证
+## 四、写入流程应该怎么设计
 
-### 5.1 启动项目
+### 4.1 推荐的写入步骤
 
-进入项目目录：
+一个稳定的写入流程，通常会按这个顺序走：
 
-```bash
-cd /Users/jianglin/Desktop/backend/AI-backend
-npm install
-npm run dev
-```
+1. 接收切好的文档块
+2. 对每个块生成稳定的 id
+3. 绑定原文和 metadata
+4. 获取对应的 embedding
+5. 统一 upsert 到 collection
+6. 记录写入数量、版本和时间
 
-如果启动正常，你应该看到类似输出：
+### 4.2 一个最小示例
 
-```bash
-🚀 Server ready at http://localhost:3000
-```
-
-> 端口以你的 `.env` / config 实际配置为准。
-
-### 5.2 调接口验证
-
-你可以直接用 curl 或 Apifox / Postman 测试：
-
-```bash
-curl -X POST http://localhost:3000/api/vector-store   -H 'Content-Type: application/json'   -d '{
-    "input": "test 用本地向量库（比如 chroma）存数据",
-    "debug": true
-  }'
-```
-
-### 5.3 预期返回
-
-如果最小实现成功，通常会看到这样的结构：
-
-```json
-{
-  "success": true,
-  "message": "用本地向量库（比如 chroma）存数据 执行成功",
-  "data": {
-    "result": {
-      "ok": true,
-      "feature": "vector-store"
+```js
+async function indexDocuments(collection, chunks) {
+  const records = chunks.map((chunk) => ({
+    id: `${chunk.docId}:${chunk.chunkIndex}`,
+    document: chunk.text,
+    vector: chunk.vector,
+    metadata: {
+      docId: chunk.docId,
+      chunkIndex: chunk.chunkIndex,
+      title: chunk.title,
+      section: chunk.section,
+      category: chunk.category,
+      version: chunk.version,
     },
-    "logs": [
-      { "stage": "thought", "content": "开始分析任务" },
-      { "stage": "action", "content": "执行 用本地向量库（比如 chroma）存数据 的核心逻辑" },
-      { "stage": "observation", "content": "用本地向量库（比如 chroma）存数据 的最小实现已经打通" }
-    ]
+  }))
+
+  await collection.upsert({
+    ids: records.map((item) => item.id),
+    embeddings: records.map((item) => item.vector),
+    documents: records.map((item) => item.document),
+    metadatas: records.map((item) => item.metadata),
+  })
+
+  return {
+    count: records.length,
+    ids: records.map((item) => item.id),
   }
 }
 ```
 
-如果你拿不到这个结果，不要急着怀疑模型，先查三件事：
-
-1. `src/routes/index.js` 有没有挂路由
-2. controller 文件名、导入名是否写对
-3. service 有没有正确 export default
+这段代码看起来简单，但它已经把“文本 -> 向量 -> 存储”这一段基础链路固定住了。后面的 search、阈值过滤和 service 封装，都会依赖这个结构。
 
 ---
 
-## 六、结合你现有项目，这一节具体应该怎么练
+## 五、总结
 
-### 6.1 最推荐的练法
+这一节真正要记住的不是某个库的专有 API，而是三个工程原则：
 
-不要追求一步到位把这一节做到完美，而是按这个顺序走：
+1. 向量库里的每条记录都应该能追踪来源
+2. upsert 能让索引更新变得可重复、可修订
+3. metadata 是检索系统的第二个入口，不是附属字段
 
-1. **先把最小路由打通**
-2. **再补 service 真逻辑**
-3. **再加日志**
-4. **最后再考虑 validator / schema / function 定义是否下沉**
-
-这是最稳的节奏。先通，再真，再好看。别反过来。
-
-### 6.2 如果你想把这节接进聊天主链路
-
-你现在项目里已经有：
-
-- `chat.routes.js`
-- `chat.controller.js`
-- `ai.service.js`
-- `functionExecutor`
-- `functions/`
-- `schemas/`
-
-所以当本节能力成熟后，可以继续考虑两种接法：
-
-#### 接法一：独立接口
-适合教学和调试，最容易定位问题。
-
-#### 接法二：接入聊天链路
-适合做真正的 Agent / function calling / tool execution。
-
-也就是说，本节先做独立接口是为了学习效率，不是因为它只能独立存在。
-
----
-
-## 七、常见坑
-
-### 7.1 容易写歪的地方
-
-1. **把所有逻辑都写进 controller**  
-   看起来快，后面改起来会很脏。
-
-2. **一上来就改 chat 主链路**  
-   这很容易把调试复杂度拉满。先独立接口，真的省命。
-
-3. **没有日志**  
-   后面做 Agent / Search / Chunk 时，你会不知道是哪一步错了。
-
-4. **没想清楚这一节能力属于哪层**  
-   结果 route、controller、service 三层职责混乱，最后谁都像打零工的。
-
-### 7.2 建议的调试顺序
-
-出了问题，按这个顺序查：
-
-1. 服务有没有启动
-2. 路由有没有注册
-3. controller 有没有被命中
-4. service 是否正常返回结构
-5. 日志里有没有异常栈
-
-这顺序很土，但很有效。别一出错就先怀疑宇宙射线。
-
----
-
-## 八、小结
-
-这一节的关键，不是“我又学了一个新名词”，而是：
-
-- 我知道怎样把 **用本地向量库（比如 chroma）存数据** 放进一套真实后端工程
-- 我知道 route / controller / service 该怎么配合
-- 我知道怎样用最小接口把能力打通
-- 我知道怎样为后续的 Agent、MCP、Embedding、Chunking 铺路
-
-如果你能按这篇文档真的在 `AI-backend` 里敲完一次，这节才算学到了。
-
-否则就还是那种很熟悉的状态：字都认识，项目不会长。
+下一节，我们就基于这份数据结构，完整跑一遍 search 查询流程。

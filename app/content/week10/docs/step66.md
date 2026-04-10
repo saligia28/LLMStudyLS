@@ -1,388 +1,248 @@
-# Step 66: 写一个自动 chunk 工具
+# Step 66: Chunking｜写一个自动 chunk 工具
 
 ## 学习目标
 
-这一节不再写成“看起来像懂了”的纯讲义，而是直接以你已经实现过的项目 **`/Users/jianglin/Desktop/backend/AI-backend`** 为练习底座，讲清楚 **写一个自动 chunk 工具** 应该怎么落进一套真实 Node 后端工程里。
+这一节要解决的是“切分这件事，能不能自动化，而且能不能切得更像人？”
 
-做完本节后，你应该能：
+完成后你应该能：
 
-1. 说清楚这项能力该落在哪一层（route / controller / service / adapter / utils）
-2. 在 `AI-backend` 现有目录结构下继续扩展，而不是另起炉灶
-3. 按步骤新增文件、修改入口、跑接口、看日志
-4. 为后续 week 的 Agent / RAG / 工具系统打基础
+1. 设计一个自动 chunk 工具的分层结构
+2. 先按文档结构分块，再按长度与 overlap 归并
+3. 输出带有 metadata 的 chunk 结果
+4. 把这个工具复用到不同类型的 Markdown 文档里
 
-> **本节目标：** 实现 markdown 文档自动切分脚本。
-
----
-
-## 一、本节内容应该落到你项目的哪里？
-
-你现在这个项目已经不是初学 demo，而是一个分层比较清楚的后端工程：
-
-```
-AI-backend/
-├── src/
-│   ├── routes/
-│   ├── controllers/
-│   ├── services/
-│   ├── adapters/
-│   ├── middleware/
-│   ├── validators/
-│   └── utils/
-├── functions/
-├── schemas/
-└── server.js
-```
-
-所以学这一节时，不要再问“我要不要新建一个 demo 项目”。答案是不需要。你应该直接在这套工程里继续长能力。
-
-### 1.1 本节推荐落点
-
-围绕 **写一个自动 chunk 工具**，建议这样放：
-
-- **routes**：暴露测试接口
-- **controllers**：解析请求、组织调用
-- **services**：承载核心业务逻辑
-- **utils / functions / schemas**：放辅助工具、函数定义、结构约束
-- **adapters**：如果本节涉及模型提供商差异，再往这里下沉
-
-### 1.2 本节真正要学会什么
-
-不是“我知道这个名词是什么意思”，而是：
-
-- 我知道这项能力为什么属于 service 层
-- 我知道怎样给它补一个测试接口
-- 我知道如何把执行日志暴露出来，方便调试
-- 我知道下一步它如何继续接到更大的 Agent 或 RAG 链路里
+> 这一节的核心不是“把字符串切开”，而是把切分变成一条清晰的流水线：解析、分块、合并、打标、输出。这样后面无论接向量库、评估脚本还是 rerank，输入都稳定。
 
 ---
 
-## 二、先设计实现方案，再动代码
+## 一、自动 chunk 工具应该长什么样
 
-### 2.1 本节建议新增 / 修改的文件
+一个好用的 chunk 工具通常不是一个函数，而是一条小流水线：
 
-先不要一上来乱写。建议按下面的文件清单推进：
-
-```
-src/
-├── routes/
-│   └── chunk-tool.routes.js          # 新增：本节练习接口
-├── controllers/
-│   └── chunk-tool.controller.js      # 新增：请求入口
-├── services/
-│   └── chunk-tool.service.js         # 新增：核心逻辑
-├── routes/index.js               # 修改：挂载新路由
-└── app.js / server.js            # 通常无需改动，除非你要挂更多中间件
-```
-
-如果本节涉及工具定义或函数调用，还可以继续扩：
-
-```
-functions/
-└── chunk-tool.js
-
-schemas/
-└── chunk-tool.schema.js
+```text
+原始文档
+  ↓
+文本归一化
+  ↓
+结构识别（标题 / 段落 / 列表 / 代码块）
+  ↓
+候选块生成
+  ↓
+按长度合并
+  ↓
+加入 overlap
+  ↓
+输出 chunk + metadata
 ```
 
-### 2.2 设计原则
+### 为什么要分层
 
-这一节建议坚持 4 个原则：
+如果你把所有逻辑都塞进一个函数里，会很快遇到这些问题：
 
-1. **核心逻辑放 service**，不要塞进 controller
-2. **controller 只做请求协调**，不做复杂业务判断
-3. **route 只负责路径和中间件**，别把逻辑写成一锅粥
-4. **先打通最小闭环，再考虑抽象与复用**
+- 规则越来越多，越来越难改
+- 不同文档类型想复用时很痛苦
+- 调试时不知道到底是哪一步出了问题
 
-这四条很朴素，但很值钱。你后面做 Agent、MCP、RAG 时，能不能不写成事故现场，基本就看它们。
+分层后，每层只做一件事：
+
+| 层 | 任务 |
+| --- | --- |
+| 归一化 | 去掉多余空格、统一换行、处理页眉页脚 |
+| 结构识别 | 找标题、段落、列表、代码块 |
+| 合并策略 | 让小块合并成目标长度附近的 chunk |
+| overlap | 让边界内容得到保留 |
+| 输出层 | 统一封装 text、id、metadata |
 
 ---
 
-## 三、代码实操：在 AI-backend 里把这节能力接进去
+## 二、第一层：文本归一化与结构识别
 
-### 3.1 第一步：先写 service
+### 2.1 先清洗，再切分
 
-创建文件：`src/services/chunk-tool.service.js`
+自动 chunk 前，最好先做最小清洗：
 
 ```js
-import logger from '../utils/logger.js'
+function normalizeMarkdown(text) {
+  return text
+    .replace(/\r\n/g, '\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+```
 
-class ChunkToolService {
-  async run(payload = {}) {
-    const startTime = Date.now()
-    const logs = []
+这一步的意义很朴素：不要让多余空白、重复空行、不同平台换行符干扰后续分块。
 
-    logs.push({ stage: 'thought', content: '开始分析任务' })
-    logs.push({ stage: 'action', content: '执行 写一个自动 chunk 工具 的核心逻辑' })
+### 2.2 识别结构块
 
-    const result = {
-      ok: true,
-      feature: 'chunk-tool',
-      payload,
-      summary: '写一个自动 chunk 工具 的最小实现已经打通',
-      completedAt: new Date().toISOString(),
+对 Markdown 文档来说，最值得利用的结构就是标题和段落。
+
+```js
+function splitMarkdownBlocks(text) {
+  const blocks = []
+  const parts = text.split(/\n(?=#{1,6}\s)|\n{2,}/)
+
+  for (const part of parts) {
+    const block = part.trim()
+    if (block) blocks.push(block)
+  }
+
+  return blocks
+}
+```
+
+如果你的文档里有代码块、表格、引用块，建议把它们视为“不可随意打断的完整块”。这类内容一旦被切碎，检索效果会明显变差。
+
+---
+
+## 三、第二层：按长度合并
+
+结构块识别出来后，下一步不是立刻输出，而是把太小的块合并到目标范围。
+
+### 3.1 一个合并规则
+
+```js
+function estimateTokens(text) {
+  const normalized = text.replace(/\s+/g, ' ').trim()
+  return Math.ceil(normalized.length / 4)
+}
+
+function mergeBlocks(blocks, targetTokens = 500, maxTokens = 700) {
+  const chunks = []
+  let buffer = []
+  let bufferTokens = 0
+
+  for (const block of blocks) {
+    const tokens = estimateTokens(block)
+
+    if (bufferTokens + tokens > maxTokens && buffer.length > 0) {
+      chunks.push(buffer.join('\n\n'))
+      buffer = []
+      bufferTokens = 0
     }
 
-    logs.push({ stage: 'observation', content: result.summary })
+    buffer.push(block)
+    bufferTokens += tokens
 
-    logger.info('chunk-tool service completed', {
-      duration: Date.now() - startTime,
-    })
-
-    return { result, logs }
+    if (bufferTokens >= targetTokens) {
+      chunks.push(buffer.join('\n\n'))
+      buffer = []
+      bufferTokens = 0
+    }
   }
-}
 
-export default new ChunkToolService()
-```
-
-这一步的目标很简单：**先把输入、执行、结果、日志结构立起来**。
-
-你别嫌它朴素。真正值钱的是这个骨架，因为后面你只需要不断把“假动作”替换成“真逻辑”。
-
-### 3.2 第二步：补 controller
-
-创建文件：`src/controllers/chunk-tool.controller.js`
-
-```js
-import { success } from '../utils/response.js'
-import chunkToolService from '../services/chunk-tool.service.js'
-
-class ChunkToolController {
-  async run(req, res) {
-    const data = await chunkToolService.run(req.body)
-    return res.json(success(data, '写一个自动 chunk 工具 执行成功'))
+  if (buffer.length > 0) {
+    chunks.push(buffer.join('\n\n'))
   }
+
+  return chunks
 }
-
-export default new ChunkToolController()
 ```
 
-为什么这一层要单独保留？因为后面你大概率会在这里做：
+### 3.2 这个合并规则解决了什么
 
-- 参数校验结果接入
-- 请求上下文拼装
-- 用户身份 / 权限信息透传
-- 返回结构格式化
-
-如果你一上来全糊进 route，后面很快就会开始骂昨天的自己。
-
-### 3.3 第三步：补 route
-
-创建文件：`src/routes/chunk-tool.routes.js`
-
-```js
-import express from 'express'
-import chunkToolController from '../controllers/chunk-tool.controller.js'
-import { asyncHandler } from '../utils/asyncHandler.js'
-
-const router = express.Router()
-
-router.post('/chunk-tool', asyncHandler(chunkToolController.run.bind(chunkToolController)))
-
-export default router
-```
-
-### 3.4 第四步：挂到总路由
-
-修改文件：`src/routes/index.js`
-
-在顶部新增：
-
-```js
-import chunktoolRoutes from './chunk-tool.routes.js'
-```
-
-在路由挂载区新增：
-
-```js
-router.use('/', chunktoolRoutes)
-```
-
-这样本节接口就会进入统一 `/api` 前缀下。
-
-最终你可以通过下面地址访问：
-
-```
-POST /api/chunk-tool
-```
+1. 防止一个标题下面只有一两行，被切得过碎。
+2. 避免 chunk 过长，超出检索友好的范围。
+3. 让 chunk 粒度更接近“一个局部主题”，而不是单纯按字数切。
 
 ---
 
-## 四、这节能力该怎么“写真”
+## 四、第三层：加入 overlap
 
-上面的代码只是最小骨架。真正练手时，你应该把本节主题替换进来。
-
-### 4.1 围绕“写一个自动 chunk 工具”的真实实现方向
-
-你可以按下面方式升级当前 service：
-
-- 如果这一节偏 **Agent / ReAct / MCP**：
-  - 在 `service.run()` 中增加多阶段日志
-  - 把 thought / action / observation 结构化输出
-  - 让 controller 直接返回完整执行过程
-
-- 如果这一节偏 **Embedding / Search / Chunking**：
-  - 在 service 中增加预处理、索引、检索等步骤
-  - 返回中间结果，如 score、chunk 数量、过滤结果
-  - 方便你在接口层先把链路看清楚
-
-### 4.2 推荐你至少保留这些字段
-
-建议统一返回：
+合并完之后，还可以给 chunk 加 overlap，保住边界信息。
 
 ```js
-{
-  result: {},
-  logs: [],
-  meta: {
-    duration: 0,
-    feature: 'chunk-tool',
-    step: 66,
+function addOverlap(chunks, overlapTokens = 80) {
+  if (chunks.length <= 1 || overlapTokens <= 0) return chunks
+
+  const next = []
+  for (let i = 0; i < chunks.length; i++) {
+    const current = chunks[i]
+    const prev = i > 0 ? chunks[i - 1] : ''
+    const tail = prev.slice(Math.max(0, prev.length - overlapTokens * 4))
+    next.push(i === 0 ? current : `${tail}\n\n${current}`)
   }
+  return next
 }
 ```
 
-因为后面你做复杂能力时，日志和 meta 会非常有用。没有这些字段，调试会像摸黑走楼梯，节目效果很强，工程体验很差。
+实际工程里，overlap 也可以按“前一个 chunk 的末尾句子”来取，而不是简单按字符截断。那样更自然，也更少出现半句话。
 
 ---
 
-## 五、如何运行和验证
+## 五、最终输出应该是什么样
 
-### 5.1 启动项目
+一个自动 chunk 工具的输出，不应该只是字符串数组，而应该是完整对象数组。
 
-进入项目目录：
+```js
+function chunkMarkdownDocument(text, options = {}) {
+  const normalized = normalizeMarkdown(text)
+  const blocks = splitMarkdownBlocks(normalized)
+  const merged = mergeBlocks(blocks, options.targetTokens ?? 500, options.maxTokens ?? 700)
+  const overlapped = addOverlap(merged, options.overlapTokens ?? 80)
 
-```bash
-cd /Users/jianglin/Desktop/backend/AI-backend
-npm install
-npm run dev
-```
-
-如果启动正常，你应该看到类似输出：
-
-```bash
-🚀 Server ready at http://localhost:3000
-```
-
-> 端口以你的 `.env` / config 实际配置为准。
-
-### 5.2 调接口验证
-
-你可以直接用 curl 或 Apifox / Postman 测试：
-
-```bash
-curl -X POST http://localhost:3000/api/chunk-tool   -H 'Content-Type: application/json'   -d '{
-    "input": "test 写一个自动 chunk 工具",
-    "debug": true
-  }'
-```
-
-### 5.3 预期返回
-
-如果最小实现成功，通常会看到这样的结构：
-
-```json
-{
-  "success": true,
-  "message": "写一个自动 chunk 工具 执行成功",
-  "data": {
-    "result": {
-      "ok": true,
-      "feature": "chunk-tool"
+  return overlapped.map((chunkText, index) => ({
+    id: `${options.docId ?? 'doc'}-${index + 1}`,
+    text: chunkText,
+    tokenCount: estimateTokens(chunkText),
+    metadata: {
+      docName: options.docName ?? 'unknown',
+      sectionPath: options.sectionPath ?? [],
+      chunkIndex: index + 1,
+      sourceType: 'markdown',
     },
-    "logs": [
-      { "stage": "thought", "content": "开始分析任务" },
-      { "stage": "action", "content": "执行 写一个自动 chunk 工具 的核心逻辑" },
-      { "stage": "observation", "content": "写一个自动 chunk 工具 的最小实现已经打通" }
-    ]
-  }
+  }))
 }
 ```
 
-如果你拿不到这个结果，不要急着怀疑模型，先查三件事：
+### 输出对象的价值
 
-1. `src/routes/index.js` 有没有挂路由
-2. controller 文件名、导入名是否写对
-3. service 有没有正确 export default
+有了对象而不是纯文本，你后面可以直接做这些事：
 
----
-
-## 六、结合你现有项目，这一节具体应该怎么练
-
-### 6.1 最推荐的练法
-
-不要追求一步到位把这一节做到完美，而是按这个顺序走：
-
-1. **先把最小路由打通**
-2. **再补 service 真逻辑**
-3. **再加日志**
-4. **最后再考虑 validator / schema / function 定义是否下沉**
-
-这是最稳的节奏。先通，再真，再好看。别反过来。
-
-### 6.2 如果你想把这节接进聊天主链路
-
-你现在项目里已经有：
-
-- `chat.routes.js`
-- `chat.controller.js`
-- `ai.service.js`
-- `functionExecutor`
-- `functions/`
-- `schemas/`
-
-所以当本节能力成熟后，可以继续考虑两种接法：
-
-#### 接法一：独立接口
-适合教学和调试，最容易定位问题。
-
-#### 接法二：接入聊天链路
-适合做真正的 Agent / function calling / tool execution。
-
-也就是说，本节先做独立接口是为了学习效率，不是因为它只能独立存在。
+- 存向量库时把 metadata 一起写入
+- 召回后直接知道这段内容来自哪一篇文档
+- 做实验时方便统计每个 chunk 的大小和来源
+- 调试时能够快速回到原始章节
 
 ---
 
-## 七、常见坑
+## 六、怎么验证这个工具好不好
 
-### 7.1 容易写歪的地方
+先别急着上复杂框架，最小验证就够了：
 
-1. **把所有逻辑都写进 controller**  
-   看起来快，后面改起来会很脏。
+```js
+const chunks = chunkMarkdownDocument(sampleDoc, {
+  docId: 'week10-step66',
+  docName: 'chunk-tool.md',
+  targetTokens: 450,
+  maxTokens: 650,
+  overlapTokens: 60,
+})
 
-2. **一上来就改 chat 主链路**  
-   这很容易把调试复杂度拉满。先独立接口，真的省命。
+console.log(chunks.map(chunk => ({
+  id: chunk.id,
+  tokenCount: chunk.tokenCount,
+  sectionPath: chunk.metadata.sectionPath.join(' > '),
+})))
+```
 
-3. **没有日志**  
-   后面做 Agent / Search / Chunk 时，你会不知道是哪一步错了。
+你要看的不是“有没有输出”，而是：
 
-4. **没想清楚这一节能力属于哪层**  
-   结果 route、controller、service 三层职责混乱，最后谁都像打零工的。
-
-### 7.2 建议的调试顺序
-
-出了问题，按这个顺序查：
-
-1. 服务有没有启动
-2. 路由有没有注册
-3. controller 有没有被命中
-4. service 是否正常返回结构
-5. 日志里有没有异常栈
-
-这顺序很土，但很有效。别一出错就先怀疑宇宙射线。
+- 标题有没有保住
+- 段落有没有被切碎
+- overlap 是否真的覆盖边界
+- 输出的 metadata 是否完整
 
 ---
 
-## 八、小结
+## 七、小结
 
-这一节的关键，不是“我又学了一个新名词”，而是：
+自动 chunk 工具的本质，是把“按经验切文档”变成“按规则切文档”。
 
-- 我知道怎样把 **写一个自动 chunk 工具** 放进一套真实后端工程
-- 我知道 route / controller / service 该怎么配合
-- 我知道怎样用最小接口把能力打通
-- 我知道怎样为后续的 Agent、MCP、Embedding、Chunking 铺路
+好的工具不是最复杂的工具，而是：
 
-如果你能按这篇文档真的在 `AI-backend` 里敲完一次，这节才算学到了。
-
-否则就还是那种很熟悉的状态：字都认识，项目不会长。
+1. 输入稳定
+2. 结构清晰
+3. 输出可追踪
+4. 参数可调
+5. 后续可实验、可优化

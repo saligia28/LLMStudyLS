@@ -1,388 +1,155 @@
-# Step 41: 做任务超时、循环限制
+# Step 41: ReAct 多步 Agent｜做任务超时、循环限制
 
 ## 学习目标
 
-这一节不再写成“看起来像懂了”的纯讲义，而是直接以你已经实现过的项目 **`/Users/jianglin/Desktop/backend/AI-backend`** 为练习底座，讲清楚 **做任务超时、循环限制** 应该怎么落进一套真实 Node 后端工程里。
+这个任务的本质是回答一个核心问题：**一个会多步推理的 Agent，怎样才能既能做事，又不会无限循环、拖垮系统？**
 
-做完本节后，你应该能：
+通过本教程，你将：
 
-1. 说清楚这项能力该落在哪一层（route / controller / service / adapter / utils）
-2. 在 `AI-backend` 现有目录结构下继续扩展，而不是另起炉灶
-3. 按步骤新增文件、修改入口、跑接口、看日志
-4. 为后续 week 的 Agent / RAG / 工具系统打基础
-
-> **本节目标：** 加入 maxSteps / timeout / fallback。
+1. 理解 Agent 为什么会失控
+2. 学会设计 `timeout`、`maxSteps` 和重复检测
+3. 学会给失败场景准备 fail-safe 策略
+4. 把安全控制变成代码，而不是口头约束
 
 ---
 
-## 一、本节内容应该落到你项目的哪里？
+## 一、为什么多步 Agent 特别需要保护？
 
-你现在这个项目已经不是初学 demo，而是一个分层比较清楚的后端工程：
+ReAct 的强项是“能继续想下一步”，但这也带来风险：
+
+- 工具失败后一直重试
+- 模型总觉得“再查一次就有答案”
+- 某些输入会触发无限重复
+- 外部工具响应过慢，导致整个请求挂起
+
+所以安全控制不是附加项，而是 Agent 能上线的前提。
+
+### 1.1 最常见的失控模式
 
 ```
-AI-backend/
-├── src/
-│   ├── routes/
-│   ├── controllers/
-│   ├── services/
-│   ├── adapters/
-│   ├── middleware/
-│   ├── validators/
-│   └── utils/
-├── functions/
-├── schemas/
-└── server.js
+Thought -> Action -> Observation -> Thought -> Action -> Observation -> ...
+                ↑
+                └── 没有停止条件，就会一直跑
 ```
-
-所以学这一节时，不要再问“我要不要新建一个 demo 项目”。答案是不需要。你应该直接在这套工程里继续长能力。
-
-### 1.1 本节推荐落点
-
-围绕 **做任务超时、循环限制**，建议这样放：
-
-- **routes**：暴露测试接口
-- **controllers**：解析请求、组织调用
-- **services**：承载核心业务逻辑
-- **utils / functions / schemas**：放辅助工具、函数定义、结构约束
-- **adapters**：如果本节涉及模型提供商差异，再往这里下沉
-
-### 1.2 本节真正要学会什么
-
-不是“我知道这个名词是什么意思”，而是：
-
-- 我知道这项能力为什么属于 service 层
-- 我知道怎样给它补一个测试接口
-- 我知道如何把执行日志暴露出来，方便调试
-- 我知道下一步它如何继续接到更大的 Agent 或 RAG 链路里
 
 ---
 
-## 二、先设计实现方案，再动代码
+## 二、机制：把控制面放到循环外层
 
-### 2.1 本节建议新增 / 修改的文件
+建议把控制分成四层：
 
-先不要一上来乱写。建议按下面的文件清单推进：
+| 控制项 | 作用 |
+|---|---|
+| `timeout` | 限定整体任务最多跑多久 |
+| `maxSteps` | 限定最多执行几轮 |
+| 重复检测 | 同一 Action 是否反复出现 |
+| fallback | 失败后返回什么 |
 
-```
-src/
-├── routes/
-│   └── agent-guard.routes.js          # 新增：本节练习接口
-├── controllers/
-│   └── agent-guard.controller.js      # 新增：请求入口
-├── services/
-│   └── agent-guard.service.js         # 新增：核心逻辑
-├── routes/index.js               # 修改：挂载新路由
-└── app.js / server.js            # 通常无需改动，除非你要挂更多中间件
-```
+### 2.1 什么时候该停？
 
-如果本节涉及工具定义或函数调用，还可以继续扩：
+常见停止条件有：
 
-```
-functions/
-└── agent-guard.js
-
-schemas/
-└── agent-guard.schema.js
-```
-
-### 2.2 设计原则
-
-这一节建议坚持 4 个原则：
-
-1. **核心逻辑放 service**，不要塞进 controller
-2. **controller 只做请求协调**，不做复杂业务判断
-3. **route 只负责路径和中间件**，别把逻辑写成一锅粥
-4. **先打通最小闭环，再考虑抽象与复用**
-
-这四条很朴素，但很值钱。你后面做 Agent、MCP、RAG 时，能不能不写成事故现场，基本就看它们。
+1. 已经输出 Final Answer
+2. 达到最大步数
+3. 总耗时超过阈值
+4. 连续重复同一工具调用
+5. 工具返回不可恢复错误
 
 ---
 
-## 三、代码实操：在 AI-backend 里把这节能力接进去
+## 三、代码：给循环套上安全壳
 
-### 3.1 第一步：先写 service
-
-创建文件：`src/services/agent-guard.service.js`
+下面是一个简单的保护层示例。核心思路是：**先设边界，再让循环跑**。
 
 ```js
-import logger from '../utils/logger.js'
+function withTimeout(promise, ms) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('timeout')), ms)
+    ),
+  ])
+}
 
-class AgentGuardService {
-  async run(payload = {}) {
-    const startTime = Date.now()
-    const logs = []
+async function runAgentSafely(agent, input, {
+  timeoutMs = 10000,
+  maxSteps = 5,
+} = {}) {
+  const seen = new Map()
+  const start = Date.now()
 
-    logs.push({ stage: 'thought', content: '开始分析任务' })
-    logs.push({ stage: 'action', content: '执行 做任务超时、循环限制 的核心逻辑' })
+  for (let step = 1; step <= maxSteps; step++) {
+    const result = await withTimeout(agent.step(input, step), timeoutMs)
 
-    const result = {
-      ok: true,
-      feature: 'agent-guard',
-      payload,
-      summary: '做任务超时、循环限制 的最小实现已经打通',
-      completedAt: new Date().toISOString(),
+    const key = JSON.stringify(result.action)
+    seen.set(key, (seen.get(key) || 0) + 1)
+
+    if (seen.get(key) >= 3) {
+      return {
+        ok: false,
+        reason: 'repeated_action',
+        fallback: '我已经多次尝试同一动作，先停止并给出保守结论。',
+      }
     }
 
-    logs.push({ stage: 'observation', content: result.summary })
+    if (result.done) {
+      return { ok: true, result, elapsedMs: Date.now() - start }
+    }
+  }
 
-    logger.info('agent-guard service completed', {
-      duration: Date.now() - startTime,
-    })
-
-    return { result, logs }
+  return {
+    ok: false,
+    reason: 'max_steps',
+    fallback: '已达到最大步数，未能稳定收敛。',
   }
 }
-
-export default new AgentGuardService()
 ```
 
-这一步的目标很简单：**先把输入、执行、结果、日志结构立起来**。
+### 3.1 这段代码解决了什么？
 
-你别嫌它朴素。真正值钱的是这个骨架，因为后面你只需要不断把“假动作”替换成“真逻辑”。
+1. `withTimeout()` 防止单次调用卡死
+2. `maxSteps` 防止循环无边界
+3. `seen` 防止重复动作
+4. `fallback` 让系统在失败时仍然有可用输出
 
-### 3.2 第二步：补 controller
+### 3.2 为什么 fail-safe 很重要？
 
-创建文件：`src/controllers/agent-guard.controller.js`
-
-```js
-import { success } from '../utils/response.js'
-import agentGuardService from '../services/agent-guard.service.js'
-
-class AgentGuardController {
-  async run(req, res) {
-    const data = await agentGuardService.run(req.body)
-    return res.json(success(data, '做任务超时、循环限制 执行成功'))
-  }
-}
-
-export default new AgentGuardController()
-```
-
-为什么这一层要单独保留？因为后面你大概率会在这里做：
-
-- 参数校验结果接入
-- 请求上下文拼装
-- 用户身份 / 权限信息透传
-- 返回结构格式化
-
-如果你一上来全糊进 route，后面很快就会开始骂昨天的自己。
-
-### 3.3 第三步：补 route
-
-创建文件：`src/routes/agent-guard.routes.js`
-
-```js
-import express from 'express'
-import agentGuardController from '../controllers/agent-guard.controller.js'
-import { asyncHandler } from '../utils/asyncHandler.js'
-
-const router = express.Router()
-
-router.post('/agent-guard', asyncHandler(agentGuardController.run.bind(agentGuardController)))
-
-export default router
-```
-
-### 3.4 第四步：挂到总路由
-
-修改文件：`src/routes/index.js`
-
-在顶部新增：
-
-```js
-import agentguardRoutes from './agent-guard.routes.js'
-```
-
-在路由挂载区新增：
-
-```js
-router.use('/', agentguardRoutes)
-```
-
-这样本节接口就会进入统一 `/api` 前缀下。
-
-最终你可以通过下面地址访问：
-
-```
-POST /api/agent-guard
-```
+因为真实业务里，最怕的不是“没答对”，而是“卡住了”。卡住的 Agent 会占资源、堆请求、影响整条链路。一个不完美但能优雅退出的系统，通常比一个“理论上很强但偶尔无限循环”的系统更可用。
 
 ---
 
-## 四、这节能力该怎么“写真”
+## 四、实验与调试：怎么验证保护真的生效？
 
-上面的代码只是最小骨架。真正练手时，你应该把本节主题替换进来。
+你可以做三个故意破坏性的测试：
 
-### 4.1 围绕“做任务超时、循环限制”的真实实现方向
+1. 把工具延迟拉长，验证 timeout 是否触发
+2. 让模型反复输出同一个 Action，验证重复检测是否生效
+3. 把 maxSteps 设很小，验证循环是否会按边界退出
 
-你可以按下面方式升级当前 service：
+### 4.1 你要看的是退出原因，不只是退出结果
 
-- 如果这一节偏 **Agent / ReAct / MCP**：
-  - 在 `service.run()` 中增加多阶段日志
-  - 把 thought / action / observation 结构化输出
-  - 让 controller 直接返回完整执行过程
-
-- 如果这一节偏 **Embedding / Search / Chunking**：
-  - 在 service 中增加预处理、索引、检索等步骤
-  - 返回中间结果，如 score、chunk 数量、过滤结果
-  - 方便你在接口层先把链路看清楚
-
-### 4.2 推荐你至少保留这些字段
-
-建议统一返回：
+建议返回结构至少包含：
 
 ```js
 {
-  result: {},
-  logs: [],
-  meta: {
-    duration: 0,
-    feature: 'agent-guard',
-    step: 41,
-  }
+  ok: false,
+  reason: 'timeout' | 'max_steps' | 'repeated_action',
+  fallback: '...',
+  trace: []
 }
 ```
 
-因为后面你做复杂能力时，日志和 meta 会非常有用。没有这些字段，调试会像摸黑走楼梯，节目效果很强，工程体验很差。
+这样你后面分析问题时，能一眼看出是“慢了”、“绕了”还是“卡了”。
 
 ---
 
-## 五、如何运行和验证
+## 五、小结：控制 Agent 的关键，是给它一个体面退出的方式
 
-### 5.1 启动项目
+ReAct 不是放飞模型，而是给模型一个可控的执行轨道。真正成熟的 Agent 系统，必须同时具备：
 
-进入项目目录：
+- 能继续做事
+- 能判断何时停止
+- 能在失败时安全落地
 
-```bash
-cd /Users/jianglin/Desktop/backend/AI-backend
-npm install
-npm run dev
-```
+这三点齐了，Agent 才算真的能放到工程里。
 
-如果启动正常，你应该看到类似输出：
-
-```bash
-🚀 Server ready at http://localhost:3000
-```
-
-> 端口以你的 `.env` / config 实际配置为准。
-
-### 5.2 调接口验证
-
-你可以直接用 curl 或 Apifox / Postman 测试：
-
-```bash
-curl -X POST http://localhost:3000/api/agent-guard   -H 'Content-Type: application/json'   -d '{
-    "input": "test 做任务超时、循环限制",
-    "debug": true
-  }'
-```
-
-### 5.3 预期返回
-
-如果最小实现成功，通常会看到这样的结构：
-
-```json
-{
-  "success": true,
-  "message": "做任务超时、循环限制 执行成功",
-  "data": {
-    "result": {
-      "ok": true,
-      "feature": "agent-guard"
-    },
-    "logs": [
-      { "stage": "thought", "content": "开始分析任务" },
-      { "stage": "action", "content": "执行 做任务超时、循环限制 的核心逻辑" },
-      { "stage": "observation", "content": "做任务超时、循环限制 的最小实现已经打通" }
-    ]
-  }
-}
-```
-
-如果你拿不到这个结果，不要急着怀疑模型，先查三件事：
-
-1. `src/routes/index.js` 有没有挂路由
-2. controller 文件名、导入名是否写对
-3. service 有没有正确 export default
-
----
-
-## 六、结合你现有项目，这一节具体应该怎么练
-
-### 6.1 最推荐的练法
-
-不要追求一步到位把这一节做到完美，而是按这个顺序走：
-
-1. **先把最小路由打通**
-2. **再补 service 真逻辑**
-3. **再加日志**
-4. **最后再考虑 validator / schema / function 定义是否下沉**
-
-这是最稳的节奏。先通，再真，再好看。别反过来。
-
-### 6.2 如果你想把这节接进聊天主链路
-
-你现在项目里已经有：
-
-- `chat.routes.js`
-- `chat.controller.js`
-- `ai.service.js`
-- `functionExecutor`
-- `functions/`
-- `schemas/`
-
-所以当本节能力成熟后，可以继续考虑两种接法：
-
-#### 接法一：独立接口
-适合教学和调试，最容易定位问题。
-
-#### 接法二：接入聊天链路
-适合做真正的 Agent / function calling / tool execution。
-
-也就是说，本节先做独立接口是为了学习效率，不是因为它只能独立存在。
-
----
-
-## 七、常见坑
-
-### 7.1 容易写歪的地方
-
-1. **把所有逻辑都写进 controller**  
-   看起来快，后面改起来会很脏。
-
-2. **一上来就改 chat 主链路**  
-   这很容易把调试复杂度拉满。先独立接口，真的省命。
-
-3. **没有日志**  
-   后面做 Agent / Search / Chunk 时，你会不知道是哪一步错了。
-
-4. **没想清楚这一节能力属于哪层**  
-   结果 route、controller、service 三层职责混乱，最后谁都像打零工的。
-
-### 7.2 建议的调试顺序
-
-出了问题，按这个顺序查：
-
-1. 服务有没有启动
-2. 路由有没有注册
-3. controller 有没有被命中
-4. service 是否正常返回结构
-5. 日志里有没有异常栈
-
-这顺序很土，但很有效。别一出错就先怀疑宇宙射线。
-
----
-
-## 八、小结
-
-这一节的关键，不是“我又学了一个新名词”，而是：
-
-- 我知道怎样把 **做任务超时、循环限制** 放进一套真实后端工程
-- 我知道 route / controller / service 该怎么配合
-- 我知道怎样用最小接口把能力打通
-- 我知道怎样为后续的 Agent、MCP、Embedding、Chunking 铺路
-
-如果你能按这篇文档真的在 `AI-backend` 里敲完一次，这节才算学到了。
-
-否则就还是那种很熟悉的状态：字都认识，项目不会长。

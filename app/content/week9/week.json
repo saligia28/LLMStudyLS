@@ -1,15 +1,16 @@
 {
   "id": "week9",
   "title": "Week 9: Embedding + 向量存储",
-  "description": "学习 embedding 与向量数据库的核心链路，构建可检索、可过滤、可封装的语义搜索基础设施。",
+  "description": "围绕 embedding 表示学习、向量相似度、embedding API、向量库存储、search 检索、阈值过滤、服务封装和 demo 数据准备，建立一条可落地的语义检索链路。",
   "order": 9,
   "steps": [
     {
       "id": "step57",
       "title": "学习 embedding 的工作原理",
-      "description": "学习学习 embedding 的工作原理，理解其在Embedding + 向量存储中的作用与实践方式。",
+      "description": "理解 embedding 为什么能把语义相近的文本映射到相近向量，并掌握余弦相似度等表示空间的基本判断方法。",
       "docFile": "step57.md",
       "codeDir": "embedding-basics",
+      "order": 57,
       "canManual": false,
       "tags": [
         "Embedding",
@@ -20,9 +21,10 @@
     {
       "id": "step58",
       "title": "用 OpenAI/DeepSeek 做 embedding",
-      "description": "学习用 OpenAI/DeepSeek 做 embedding，理解其在Embedding + 向量存储中的作用与实践方式。",
+      "description": "学习 OpenAI/DeepSeek embedding API 的输入输出、批量调用和结果组织方式，打通文本向量化的第一步。",
       "docFile": "step58.md",
       "codeDir": "embedding-api",
+      "order": 58,
       "canManual": false,
       "tags": [
         "API",
@@ -33,9 +35,10 @@
     {
       "id": "step59",
       "title": "用本地向量库（比如 chroma）存数据",
-      "description": "学习用本地向量库（比如 chroma）存数据，理解其在Embedding + 向量存储中的作用与实践方式。",
+      "description": "理解本地向量库的数据模型、collection 设计与 upsert 写入流程，学会把向量和 metadata 一起持久化。",
       "docFile": "step59.md",
       "codeDir": "vector-store",
+      "order": 59,
       "canManual": false,
       "tags": [
         "Chroma",
@@ -46,9 +49,10 @@
     {
       "id": "step60",
       "title": "实现 search 查询",
-      "description": "学习实现 search 查询，理解其在Embedding + 向量存储中的作用与实践方式。",
+      "description": "打通从查询文本到向量检索结果返回的完整 search 流程，理解 query embedding、候选召回和结果排序。",
       "docFile": "step60.md",
       "codeDir": "vector-search",
+      "order": 60,
       "canManual": false,
       "tags": [
         "Search",
@@ -59,9 +63,10 @@
     {
       "id": "step61",
       "title": "添加相似度过滤",
-      "description": "学习添加相似度过滤，理解其在Embedding + 向量存储中的作用与实践方式。",
+      "description": "掌握 Top-K 与阈值过滤的组合策略，并理解 precision/recall 的取舍、分数校准和噪声控制。",
       "docFile": "step61.md",
       "codeDir": "similarity-filter",
+      "order": 61,
       "canManual": false,
       "tags": [
         "过滤",
@@ -72,9 +77,10 @@
     {
       "id": "step62",
       "title": "封装 embedding service",
-      "description": "学习封装 embedding service，理解其在Embedding + 向量存储中的作用与实践方式。",
+      "description": "将 embedding、写入、检索封装成可测试、可替换、可扩展的 service 边界，形成统一调用入口。",
       "docFile": "step62.md",
       "codeDir": "embedding-service",
+      "order": 62,
       "canManual": false,
       "tags": [
         "Service",
@@ -85,9 +91,10 @@
     {
       "id": "step63",
       "title": "整理 demo 数据",
-      "description": "学习整理 demo 数据，理解其在Embedding + 向量存储中的作用与实践方式。",
+      "description": "整理 demo 数据、切分文本并设计 metadata，为后续检索调优与更复杂的实验准备高质量样本。",
       "docFile": "step63.md",
       "codeDir": "demo-data",
+      "order": 63,
       "canManual": false,
       "tags": [
         "数据",

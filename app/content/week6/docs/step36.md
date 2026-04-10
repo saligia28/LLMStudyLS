@@ -1,388 +1,188 @@
-# Step 36: 理解 ReAct（思维链 + 行动）模式
+# Step 36: ReAct 多步 Agent｜理解 ReAct（思维链 + 行动）模式
 
 ## 学习目标
 
-这一节不再写成“看起来像懂了”的纯讲义，而是直接以你已经实现过的项目 **`/Users/jianglin/Desktop/backend/AI-backend`** 为练习底座，讲清楚 **理解 ReAct（思维链 + 行动）模式** 应该怎么落进一套真实 Node 后端工程里。
+这个任务的本质是回答一个核心问题：**ReAct 为什么不是“更会聊天的 LLM”，而是“能把思考接到行动上的 Agent”？**
 
-做完本节后，你应该能：
+通过本教程，你将：
 
-1. 说清楚这项能力该落在哪一层（route / controller / service / adapter / utils）
-2. 在 `AI-backend` 现有目录结构下继续扩展，而不是另起炉灶
-3. 按步骤新增文件、修改入口、跑接口、看日志
-4. 为后续 week 的 Agent / RAG / 工具系统打基础
-
-> **本节目标：** 在 AI-backend 中加入一个最小 ReAct 执行器，先能打印 thought / action / observation。
+1. 明白 ReAct 和普通 function calling 的本质区别
+2. 看懂 Thought / Action / Observation 是怎么串成循环的
+3. 理解为什么 ReAct 天然适合多步任务与工具调用
+4. 学会写一个最小 ReAct prompt 模板和 trace 记录结构
 
 ---
 
-## 一、本节内容应该落到你项目的哪里？
+## 一、先想清楚：ReAct 解决的到底是什么问题？
 
-你现在这个项目已经不是初学 demo，而是一个分层比较清楚的后端工程：
+普通 LLM 最擅长的是“补全文本”，但很多真实任务并不是一次性写答案就结束，而是要先查、再算、再判断、最后总结。比如：
+
+> “帮我比较北京和上海今天哪个更适合户外活动。”
+
+如果没有外部工具，模型只能靠记忆猜；如果只有 function calling，它能调用工具，但**不一定知道什么时候该停、什么时候该继续、下一步该做什么**。ReAct 解决的就是这个“从想法到行动”的过渡问题。
+
+### 1.1 ReAct 的核心不是“调用工具”，而是“循环驱动”
 
 ```
-AI-backend/
-├── src/
-│   ├── routes/
-│   ├── controllers/
-│   ├── services/
-│   ├── adapters/
-│   ├── middleware/
-│   ├── validators/
-│   └── utils/
-├── functions/
-├── schemas/
-└── server.js
+用户问题
+   ↓
+Thought: 先判断信息缺口
+   ↓
+Action: 选择一个工具
+   ↓
+Observation: 读取工具返回
+   ↓
+Thought: 根据结果调整策略
+   ↓
+Action: 继续调用下一个工具
+   ↓
+...
+   ↓
+Final Answer
 ```
 
-所以学这一节时，不要再问“我要不要新建一个 demo 项目”。答案是不需要。你应该直接在这套工程里继续长能力。
+这意味着 ReAct 的重点不是某一次调用，而是**一轮一轮地纠偏**。它把“推理”和“执行”绑在一起，让模型在每次观察后重新决策。
 
-### 1.1 本节推荐落点
+### 1.2 和普通 function calling 的区别
 
-围绕 **理解 ReAct（思维链 + 行动）模式**，建议这样放：
+| 维度 | 普通 function calling | ReAct |
+|---|---|---|
+| 目标 | 让模型发起一次工具调用 | 让模型在循环中完成任务 |
+| 过程 | 通常是单次或少次调用 | Thought / Action / Observation 多轮推进 |
+| 控制重点 | 参数是否正确 | 下一步是否该继续、换工具还是结束 |
+| 失败处理 | 常见是一次失败就结束 | 可根据 Observation 纠偏 |
+| 适合场景 | 明确、短链路任务 | 搜索、比较、规划、推理、综合 |
 
-- **routes**：暴露测试接口
-- **controllers**：解析请求、组织调用
-- **services**：承载核心业务逻辑
-- **utils / functions / schemas**：放辅助工具、函数定义、结构约束
-- **adapters**：如果本节涉及模型提供商差异，再往这里下沉
-
-### 1.2 本节真正要学会什么
-
-不是“我知道这个名词是什么意思”，而是：
-
-- 我知道这项能力为什么属于 service 层
-- 我知道怎样给它补一个测试接口
-- 我知道如何把执行日志暴露出来，方便调试
-- 我知道下一步它如何继续接到更大的 Agent 或 RAG 链路里
+你可以把 function calling 理解成“给模型一把扳手”，把 ReAct 理解成“给模型一整套现场施工流程”。
 
 ---
 
-## 二、先设计实现方案，再动代码
+## 二、机制：Thought / Action / Observation 怎么协同？
 
-### 2.1 本节建议新增 / 修改的文件
+ReAct 最容易被误解成“把思维链打印出来”。其实不是。真正有价值的是三层语义分工：
 
-先不要一上来乱写。建议按下面的文件清单推进：
+### 2.1 Thought：决定下一步为什么这么做
 
-```
-src/
-├── routes/
-│   └── react.routes.js          # 新增：本节练习接口
-├── controllers/
-│   └── react.controller.js      # 新增：请求入口
-├── services/
-│   └── react.service.js         # 新增：核心逻辑
-├── routes/index.js               # 修改：挂载新路由
-└── app.js / server.js            # 通常无需改动，除非你要挂更多中间件
-```
+Thought 不等于长篇大论，它更像一个短小的工作判断：
 
-如果本节涉及工具定义或函数调用，还可以继续扩：
+- 现在信息够不够
+- 需要哪个工具
+- 要不要先搜索再计算
+- 结果是否已经可以收尾
 
-```
-functions/
-└── react.js
+### 2.2 Action：把判断变成可执行动作
 
-schemas/
-└── react.schema.js
-```
-
-### 2.2 设计原则
-
-这一节建议坚持 4 个原则：
-
-1. **核心逻辑放 service**，不要塞进 controller
-2. **controller 只做请求协调**，不做复杂业务判断
-3. **route 只负责路径和中间件**，别把逻辑写成一锅粥
-4. **先打通最小闭环，再考虑抽象与复用**
-
-这四条很朴素，但很值钱。你后面做 Agent、MCP、RAG 时，能不能不写成事故现场，基本就看它们。
-
----
-
-## 三、代码实操：在 AI-backend 里把这节能力接进去
-
-### 3.1 第一步：先写 service
-
-创建文件：`src/services/react.service.js`
-
-```js
-import logger from '../utils/logger.js'
-
-class ReactService {
-  async run(payload = {}) {
-    const startTime = Date.now()
-    const logs = []
-
-    logs.push({ stage: 'thought', content: '开始分析任务' })
-    logs.push({ stage: 'action', content: '执行 理解 ReAct（思维链 + 行动）模式 的核心逻辑' })
-
-    const result = {
-      ok: true,
-      feature: 'react',
-      payload,
-      summary: '理解 ReAct（思维链 + 行动）模式 的最小实现已经打通',
-      completedAt: new Date().toISOString(),
-    }
-
-    logs.push({ stage: 'observation', content: result.summary })
-
-    logger.info('react service completed', {
-      duration: Date.now() - startTime,
-    })
-
-    return { result, logs }
-  }
-}
-
-export default new ReactService()
-```
-
-这一步的目标很简单：**先把输入、执行、结果、日志结构立起来**。
-
-你别嫌它朴素。真正值钱的是这个骨架，因为后面你只需要不断把“假动作”替换成“真逻辑”。
-
-### 3.2 第二步：补 controller
-
-创建文件：`src/controllers/react.controller.js`
-
-```js
-import { success } from '../utils/response.js'
-import reactService from '../services/react.service.js'
-
-class ReactController {
-  async run(req, res) {
-    const data = await reactService.run(req.body)
-    return res.json(success(data, '理解 ReAct（思维链 + 行动）模式 执行成功'))
-  }
-}
-
-export default new ReactController()
-```
-
-为什么这一层要单独保留？因为后面你大概率会在这里做：
-
-- 参数校验结果接入
-- 请求上下文拼装
-- 用户身份 / 权限信息透传
-- 返回结构格式化
-
-如果你一上来全糊进 route，后面很快就会开始骂昨天的自己。
-
-### 3.3 第三步：补 route
-
-创建文件：`src/routes/react.routes.js`
-
-```js
-import express from 'express'
-import reactController from '../controllers/react.controller.js'
-import { asyncHandler } from '../utils/asyncHandler.js'
-
-const router = express.Router()
-
-router.post('/react', asyncHandler(reactController.run.bind(reactController)))
-
-export default router
-```
-
-### 3.4 第四步：挂到总路由
-
-修改文件：`src/routes/index.js`
-
-在顶部新增：
-
-```js
-import reactRoutes from './react.routes.js'
-```
-
-在路由挂载区新增：
-
-```js
-router.use('/', reactRoutes)
-```
-
-这样本节接口就会进入统一 `/api` 前缀下。
-
-最终你可以通过下面地址访问：
-
-```
-POST /api/react
-```
-
----
-
-## 四、这节能力该怎么“写真”
-
-上面的代码只是最小骨架。真正练手时，你应该把本节主题替换进来。
-
-### 4.1 围绕“理解 ReAct（思维链 + 行动）模式”的真实实现方向
-
-你可以按下面方式升级当前 service：
-
-- 如果这一节偏 **Agent / ReAct / MCP**：
-  - 在 `service.run()` 中增加多阶段日志
-  - 把 thought / action / observation 结构化输出
-  - 让 controller 直接返回完整执行过程
-
-- 如果这一节偏 **Embedding / Search / Chunking**：
-  - 在 service 中增加预处理、索引、检索等步骤
-  - 返回中间结果，如 score、chunk 数量、过滤结果
-  - 方便你在接口层先把链路看清楚
-
-### 4.2 推荐你至少保留这些字段
-
-建议统一返回：
-
-```js
-{
-  result: {},
-  logs: [],
-  meta: {
-    duration: 0,
-    feature: 'react',
-    step: 36,
-  }
-}
-```
-
-因为后面你做复杂能力时，日志和 meta 会非常有用。没有这些字段，调试会像摸黑走楼梯，节目效果很强，工程体验很差。
-
----
-
-## 五、如何运行和验证
-
-### 5.1 启动项目
-
-进入项目目录：
-
-```bash
-cd /Users/jianglin/Desktop/backend/AI-backend
-npm install
-npm run dev
-```
-
-如果启动正常，你应该看到类似输出：
-
-```bash
-🚀 Server ready at http://localhost:3000
-```
-
-> 端口以你的 `.env` / config 实际配置为准。
-
-### 5.2 调接口验证
-
-你可以直接用 curl 或 Apifox / Postman 测试：
-
-```bash
-curl -X POST http://localhost:3000/api/react   -H 'Content-Type: application/json'   -d '{
-    "input": "test 理解 ReAct（思维链 + 行动）模式",
-    "debug": true
-  }'
-```
-
-### 5.3 预期返回
-
-如果最小实现成功，通常会看到这样的结构：
+Action 不是自然语言感叹，而是结构化指令，例如：
 
 ```json
-{
-  "success": true,
-  "message": "理解 ReAct（思维链 + 行动）模式 执行成功",
-  "data": {
-    "result": {
-      "ok": true,
-      "feature": "react"
-    },
-    "logs": [
-      { "stage": "thought", "content": "开始分析任务" },
-      { "stage": "action", "content": "执行 理解 ReAct（思维链 + 行动）模式 的核心逻辑" },
-      { "stage": "observation", "content": "理解 ReAct（思维链 + 行动）模式 的最小实现已经打通" }
-    ]
-  }
+{ "tool": "search", "input": "北京 今天 天气" }
+```
+
+### 2.3 Observation：把真实世界的反馈接回系统
+
+Observation 是工具执行后的结果，它是 ReAct 能“修正自己”的关键。没有 Observation，模型就只是自言自语；有了 Observation，下一轮 Thought 才有依据。
+
+```
+Thought 1: 先查北京天气
+Action 1:  调用 search/weather
+Observation 1: 北京，多云，8°C，风大
+Thought 2: 继续查上海天气再比较
+Action 2:  调用 search/weather
+Observation 2: 上海，晴，18°C，风小
+Thought 3: 结果足够了，可以回答
+Final Answer: 上海更适合户外活动
+```
+
+---
+
+## 三、代码：最小 ReAct Prompt 模板
+
+ReAct 的“发动机”通常不是复杂代码，而是一个足够清晰的 prompt 约束。下面是一个最小可用模板：
+
+```js
+function buildReActPrompt({ tools, question }) {
+  const toolText = tools
+    .map((t) => `- ${t.name}: ${t.description}`)
+    .join('\n')
+
+  return `
+你是一个 ReAct Agent。
+
+你可以使用这些工具：
+${toolText}
+
+规则：
+1. 每轮先写 Thought，再写 Action。
+2. Action 必须是结构化 JSON。
+3. 工具返回后，再根据 Observation 决定下一步。
+4. 如果信息足够，输出 Final Answer。
+
+输出格式：
+Thought: ...
+Action: {"tool":"...","input":"..."}
+Observation: ...
+Final Answer: ...
+
+问题：${question}
+`
 }
 ```
 
-如果你拿不到这个结果，不要急着怀疑模型，先查三件事：
+### 3.1 为什么 prompt 里要写规则？
 
-1. `src/routes/index.js` 有没有挂路由
-2. controller 文件名、导入名是否写对
-3. service 有没有正确 export default
+因为 ReAct 的难点不是“模型会不会说”，而是“模型会不会按循环格式输出”。如果不把格式约束写清楚，模型很容易：
 
----
+- 把 Thought 写成长篇解释
+- 在 Action 里夹带自然语言
+- 在没观察结果前直接下结论
 
-## 六、结合你现有项目，这一节具体应该怎么练
+### 3.2 还要准备 trace 结构
 
-### 6.1 最推荐的练法
+建议从第一天就记录每一轮：
 
-不要追求一步到位把这一节做到完美，而是按这个顺序走：
+```js
+const trace = [
+  { step: 1, thought: '先查北京天气', action: 'search', observation: '...' },
+  { step: 2, thought: '再查上海天气', action: 'search', observation: '...' },
+]
+```
 
-1. **先把最小路由打通**
-2. **再补 service 真逻辑**
-3. **再加日志**
-4. **最后再考虑 validator / schema / function 定义是否下沉**
-
-这是最稳的节奏。先通，再真，再好看。别反过来。
-
-### 6.2 如果你想把这节接进聊天主链路
-
-你现在项目里已经有：
-
-- `chat.routes.js`
-- `chat.controller.js`
-- `ai.service.js`
-- `functionExecutor`
-- `functions/`
-- `schemas/`
-
-所以当本节能力成熟后，可以继续考虑两种接法：
-
-#### 接法一：独立接口
-适合教学和调试，最容易定位问题。
-
-#### 接法二：接入聊天链路
-适合做真正的 Agent / function calling / tool execution。
-
-也就是说，本节先做独立接口是为了学习效率，不是因为它只能独立存在。
+Trace 不是“日志装饰”，它是你后面调 prompt、做评测、定位幻觉的核心证据。
 
 ---
 
-## 七、常见坑
+## 四、实验与调试：你应该重点看什么？
 
-### 7.1 容易写歪的地方
+### 4.1 先区分“看起来在推理”和“真的在循环”
 
-1. **把所有逻辑都写进 controller**  
-   看起来快，后面改起来会很脏。
+有些模型会输出很长的思考过程，但如果它没有基于 Observation 改变策略，那就不是 ReAct，而是“写作风格像 ReAct”。
 
-2. **一上来就改 chat 主链路**  
-   这很容易把调试复杂度拉满。先独立接口，真的省命。
+你可以检查三件事：
 
-3. **没有日志**  
-   后面做 Agent / Search / Chunk 时，你会不知道是哪一步错了。
+1. 是否真的出现了 Action
+2. Observation 是否进入了下一轮上下文
+3. 下一轮 Thought 是否参考了前一轮结果
 
-4. **没想清楚这一节能力属于哪层**  
-   结果 route、controller、service 三层职责混乱，最后谁都像打零工的。
+### 4.2 常见问题
 
-### 7.2 建议的调试顺序
-
-出了问题，按这个顺序查：
-
-1. 服务有没有启动
-2. 路由有没有注册
-3. controller 有没有被命中
-4. service 是否正常返回结构
-5. 日志里有没有异常栈
-
-这顺序很土，但很有效。别一出错就先怀疑宇宙射线。
+| 问题 | 典型现象 | 修复方向 |
+|---|---|---|
+| 工具描述太弱 | 模型乱选工具 | 把工具能力写具体 |
+| 输出格式漂移 | Action 无法解析 | 强化模板和示例 |
+| 一步就结束 | 没有循环 | 提示模型“只要信息不够就继续” |
+| 观察结果没用上 | 重复调用同一工具 | 在上下文里保留 trace |
 
 ---
 
-## 八、小结
+## 五、小结：ReAct 的最佳实践
 
-这一节的关键，不是“我又学了一个新名词”，而是：
+ReAct 的本质不是“更聪明”，而是“更会在过程中纠偏”。如果你记住一句话，那就是：
 
-- 我知道怎样把 **理解 ReAct（思维链 + 行动）模式** 放进一套真实后端工程
-- 我知道 route / controller / service 该怎么配合
-- 我知道怎样用最小接口把能力打通
-- 我知道怎样为后续的 Agent、MCP、Embedding、Chunking 铺路
+> **ReAct = 让模型在每次观察后重新决策，而不是一次性猜完整答案。**
 
-如果你能按这篇文档真的在 `AI-backend` 里敲完一次，这节才算学到了。
+实操时建议遵守三条：
 
-否则就还是那种很熟悉的状态：字都认识，项目不会长。
+1. 工具能力要写清楚，别让模型猜
+2. 每轮都记录 trace，别把过程藏起来
+3. 先保证循环成立，再谈更复杂的规划和优化
+

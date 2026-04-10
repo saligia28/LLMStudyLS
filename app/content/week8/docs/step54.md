@@ -1,388 +1,221 @@
-# Step 54: 加入任务链（plan → execute → verify）
+# Step 54: 项目级 Agent｜加入任务链（plan → execute → verify）
 
 ## 学习目标
 
-这一节不再写成“看起来像懂了”的纯讲义，而是直接以你已经实现过的项目 **`/Users/jianglin/Desktop/backend/AI-backend`** 为练习底座，讲清楚 **加入任务链（plan → execute → verify）** 应该怎么落进一套真实 Node 后端工程里。
+这一节要把前面所有能力串起来，形成一条可运行、可回放、可恢复的任务链。
 
 做完本节后，你应该能：
 
-1. 说清楚这项能力该落在哪一层（route / controller / service / adapter / utils）
-2. 在 `AI-backend` 现有目录结构下继续扩展，而不是另起炉灶
-3. 按步骤新增文件、修改入口、跑接口、看日志
-4. 为后续 week 的 Agent / RAG / 工具系统打基础
+1. 把复杂任务拆成 plan / execute / verify 三阶段
+2. 为每一阶段设计状态机和检查点
+3. 在失败时做恢复、重试或回滚
+4. 理解为什么项目级 Agent 不能只靠“一次回答”完成任务
 
-> **本节目标：** 实现三阶段任务链。
-
----
-
-## 一、本节内容应该落到你项目的哪里？
-
-你现在这个项目已经不是初学 demo，而是一个分层比较清楚的后端工程：
-
-```
-AI-backend/
-├── src/
-│   ├── routes/
-│   ├── controllers/
-│   ├── services/
-│   ├── adapters/
-│   ├── middleware/
-│   ├── validators/
-│   └── utils/
-├── functions/
-├── schemas/
-└── server.js
-```
-
-所以学这一节时，不要再问“我要不要新建一个 demo 项目”。答案是不需要。你应该直接在这套工程里继续长能力。
-
-### 1.1 本节推荐落点
-
-围绕 **加入任务链（plan → execute → verify）**，建议这样放：
-
-- **routes**：暴露测试接口
-- **controllers**：解析请求、组织调用
-- **services**：承载核心业务逻辑
-- **utils / functions / schemas**：放辅助工具、函数定义、结构约束
-- **adapters**：如果本节涉及模型提供商差异，再往这里下沉
-
-### 1.2 本节真正要学会什么
-
-不是“我知道这个名词是什么意思”，而是：
-
-- 我知道这项能力为什么属于 service 层
-- 我知道怎样给它补一个测试接口
-- 我知道如何把执行日志暴露出来，方便调试
-- 我知道下一步它如何继续接到更大的 Agent 或 RAG 链路里
+> 任务链的核心不是步骤多，而是每一步都可验证、可恢复、可审计。
 
 ---
 
-## 二、先设计实现方案，再动代码
+## 一、问题背景：为什么单步执行很容易出事
 
-### 2.1 本节建议新增 / 修改的文件
+在真实工程里，用户给出的任务往往不是一句话就能完成的简单操作，而是：
 
-先不要一上来乱写。建议按下面的文件清单推进：
+- 先理解问题
+- 再列出修改方案
+- 再确认风险
+- 再执行写入
+- 再跑测试
+- 最后整理结果
 
-```
-src/
-├── routes/
-│   └── task-pipeline.routes.js          # 新增：本节练习接口
-├── controllers/
-│   └── task-pipeline.controller.js      # 新增：请求入口
-├── services/
-│   └── task-pipeline.service.js         # 新增：核心逻辑
-├── routes/index.js               # 修改：挂载新路由
-└── app.js / server.js            # 通常无需改动，除非你要挂更多中间件
-```
+如果把这些合成一次性动作，系统很容易出现：
 
-如果本节涉及工具定义或函数调用，还可以继续扩：
+- 计划不完整就开始写
+- 写完不验证，直接汇报成功
+- 中间失败了但不知道停在哪里
+- 用户只看到结论，看不到过程
 
-```
-functions/
-└── task-pipeline.js
-
-schemas/
-└── task-pipeline.schema.js
-```
-
-### 2.2 设计原则
-
-这一节建议坚持 4 个原则：
-
-1. **核心逻辑放 service**，不要塞进 controller
-2. **controller 只做请求协调**，不做复杂业务判断
-3. **route 只负责路径和中间件**，别把逻辑写成一锅粥
-4. **先打通最小闭环，再考虑抽象与复用**
-
-这四条很朴素，但很值钱。你后面做 Agent、MCP、RAG 时，能不能不写成事故现场，基本就看它们。
+所以项目级 Agent 最需要的能力之一，就是把任务变成**阶段化流程**。
 
 ---
 
-## 三、代码实操：在 AI-backend 里把这节能力接进去
+## 二、架构拆解：任务链和状态机
 
-### 3.1 第一步：先写 service
+### 2.1 推荐状态机
 
-创建文件：`src/services/task-pipeline.service.js`
+```text
+draft
+  -> planned
+  -> awaiting_approval
+  -> executing
+  -> verifying
+  -> succeeded
+
+任何阶段都可能进入:
+  -> failed
+  -> rolled_back
+  -> needs_attention
+```
+
+### 2.2 各阶段职责
+
+| 阶段 | 作用 | 输出 |
+|---|---|---|
+| plan | 生成步骤、风险、验证命令 | patch plan |
+| execute | 按计划修改文件或运行命令 | 写入结果、执行日志 |
+| verify | 证明结果可用 | 测试结果、lint、diff |
+| rollback | 当失败时回退到安全状态 | 恢复快照、撤销补丁 |
+
+任务链不应该只是“函数串联”，它应该是**带状态的任务生命周期**。
+
+---
+
+## 三、机制设计：把 plan、execute、verify 组织成一个 runner
+
+### 3.1 任务对象示例
 
 ```js
-import logger from '../utils/logger.js'
+const task = {
+  id: 'task-20260410-002',
+  goal: '给工程师 Agent 增加任务链',
+  state: 'draft',
+  plan: null,
+  snapshotId: null,
+  result: null,
+  verification: null,
+  error: null,
+}
+```
 
-class TaskPipelineService {
-  async run(payload = {}) {
-    const startTime = Date.now()
-    const logs = []
+### 3.2 runner 的职责
 
-    logs.push({ stage: 'thought', content: '开始分析任务' })
-    logs.push({ stage: 'action', content: '执行 加入任务链（plan → execute → verify） 的核心逻辑' })
+runner 不负责具体业务细节，它只负责：
 
-    const result = {
-      ok: true,
-      feature: 'task-pipeline',
-      payload,
-      summary: '加入任务链（plan → execute → verify） 的最小实现已经打通',
-      completedAt: new Date().toISOString(),
+- 控制阶段顺序
+- 记录状态变化
+- 处理失败
+- 触发回滚
+- 汇总最终结果
+
+### 3.3 最小状态迁移规则
+
+```js
+function transition(task, nextState) {
+  const allowed = {
+    draft: ['planned', 'failed'],
+    planned: ['awaiting_approval', 'failed'],
+    awaiting_approval: ['executing', 'rejected'],
+    executing: ['verifying', 'failed'],
+    verifying: ['succeeded', 'failed'],
+    failed: ['rolled_back', 'needs_attention'],
+  }
+
+  if (!allowed[task.state]?.includes(nextState)) {
+    throw new Error(`invalid transition: ${task.state} -> ${nextState}`)
+  }
+
+  task.state = nextState
+  return task
+}
+```
+
+状态机的意义在于：你不会把“失败了还能继续执行”的危险路径藏起来。
+
+---
+
+## 四、代码示例：一个带恢复能力的任务链执行器
+
+```js
+class TaskRunner {
+  constructor({ planner, approval, executor, verifier, memory }) {
+    this.planner = planner
+    this.approval = approval
+    this.executor = executor
+    this.verifier = verifier
+    this.memory = memory
+  }
+
+  async run(taskInput) {
+    const task = { ...taskInput, state: 'draft' }
+
+    try {
+      task.plan = await this.planner.buildPlan(task)
+      transition(task, 'planned')
+
+      const approval = await this.approval.request(task, task.plan)
+      if (!approval.approved) {
+        transition(task, 'failed')
+        return { task, approval }
+      }
+
+      transition(task, 'awaiting_approval')
+      task.snapshotId = await this.memory.createSnapshot(task)
+
+      transition(task, 'executing')
+      task.result = await this.executor.execute(task, task.plan)
+
+      transition(task, 'verifying')
+      task.verification = await this.verifier.verify(task, task.result)
+
+      if (!task.verification.passed) {
+        throw new Error(task.verification.reason || 'verification failed')
+      }
+
+      transition(task, 'succeeded')
+      return { task, approval, result: task.result, verification: task.verification }
+    } catch (error) {
+      task.error = error.message
+      transition(task, 'failed')
+      await this.memory.rollback(task.snapshotId)
+      transition(task, 'rolled_back')
+      return { task, error: task.error, rolledBack: true }
     }
-
-    logs.push({ stage: 'observation', content: result.summary })
-
-    logger.info('task-pipeline service completed', {
-      duration: Date.now() - startTime,
-    })
-
-    return { result, logs }
-  }
-}
-
-export default new TaskPipelineService()
-```
-
-这一步的目标很简单：**先把输入、执行、结果、日志结构立起来**。
-
-你别嫌它朴素。真正值钱的是这个骨架，因为后面你只需要不断把“假动作”替换成“真逻辑”。
-
-### 3.2 第二步：补 controller
-
-创建文件：`src/controllers/task-pipeline.controller.js`
-
-```js
-import { success } from '../utils/response.js'
-import taskPipelineService from '../services/task-pipeline.service.js'
-
-class TaskPipelineController {
-  async run(req, res) {
-    const data = await taskPipelineService.run(req.body)
-    return res.json(success(data, '加入任务链（plan → execute → verify） 执行成功'))
-  }
-}
-
-export default new TaskPipelineController()
-```
-
-为什么这一层要单独保留？因为后面你大概率会在这里做：
-
-- 参数校验结果接入
-- 请求上下文拼装
-- 用户身份 / 权限信息透传
-- 返回结构格式化
-
-如果你一上来全糊进 route，后面很快就会开始骂昨天的自己。
-
-### 3.3 第三步：补 route
-
-创建文件：`src/routes/task-pipeline.routes.js`
-
-```js
-import express from 'express'
-import taskPipelineController from '../controllers/task-pipeline.controller.js'
-import { asyncHandler } from '../utils/asyncHandler.js'
-
-const router = express.Router()
-
-router.post('/task-pipeline', asyncHandler(taskPipelineController.run.bind(taskPipelineController)))
-
-export default router
-```
-
-### 3.4 第四步：挂到总路由
-
-修改文件：`src/routes/index.js`
-
-在顶部新增：
-
-```js
-import taskpipelineRoutes from './task-pipeline.routes.js'
-```
-
-在路由挂载区新增：
-
-```js
-router.use('/', taskpipelineRoutes)
-```
-
-这样本节接口就会进入统一 `/api` 前缀下。
-
-最终你可以通过下面地址访问：
-
-```
-POST /api/task-pipeline
-```
-
----
-
-## 四、这节能力该怎么“写真”
-
-上面的代码只是最小骨架。真正练手时，你应该把本节主题替换进来。
-
-### 4.1 围绕“加入任务链（plan → execute → verify）”的真实实现方向
-
-你可以按下面方式升级当前 service：
-
-- 如果这一节偏 **Agent / ReAct / MCP**：
-  - 在 `service.run()` 中增加多阶段日志
-  - 把 thought / action / observation 结构化输出
-  - 让 controller 直接返回完整执行过程
-
-- 如果这一节偏 **Embedding / Search / Chunking**：
-  - 在 service 中增加预处理、索引、检索等步骤
-  - 返回中间结果，如 score、chunk 数量、过滤结果
-  - 方便你在接口层先把链路看清楚
-
-### 4.2 推荐你至少保留这些字段
-
-建议统一返回：
-
-```js
-{
-  result: {},
-  logs: [],
-  meta: {
-    duration: 0,
-    feature: 'task-pipeline',
-    step: 54,
   }
 }
 ```
 
-因为后面你做复杂能力时，日志和 meta 会非常有用。没有这些字段，调试会像摸黑走楼梯，节目效果很强，工程体验很差。
+这个示例有三个关键点：
+
+1. `snapshotId` 让系统知道回滚基线在哪
+2. `verification` 让成功不是靠口头声明，而是靠检查
+3. `catch` 里的回滚让失败不会留下一半改动
 
 ---
 
-## 五、如何运行和验证
+## 五、风险与验证：失败恢复比成功更重要
 
-### 5.1 启动项目
+### 5.1 需要明确的失败类型
 
-进入项目目录：
+- 计划失败：任务目标不清楚
+- 审批失败：用户拒绝或权限不足
+- 执行失败：写入、命令、补丁应用出错
+- 验证失败：测试未通过、lint 报错、健康检查异常
 
-```bash
-cd /Users/jianglin/Desktop/backend/AI-backend
-npm install
-npm run dev
-```
+### 5.2 恢复策略
 
-如果启动正常，你应该看到类似输出：
+| 失败位置 | 推荐处理 |
+|---|---|
+| 计划前 | 重新提问，补充任务信息 |
+| 审批前 | 返回 diff 和风险说明 |
+| 执行中 | 停止后续步骤并保存日志 |
+| 验证中 | 回滚到最近快照 |
 
-```bash
-🚀 Server ready at http://localhost:3000
-```
+### 5.3 验证建议
 
-> 端口以你的 `.env` / config 实际配置为准。
-
-### 5.2 调接口验证
-
-你可以直接用 curl 或 Apifox / Postman 测试：
-
-```bash
-curl -X POST http://localhost:3000/api/task-pipeline   -H 'Content-Type: application/json'   -d '{
-    "input": "test 加入任务链（plan → execute → verify）",
-    "debug": true
-  }'
-```
-
-### 5.3 预期返回
-
-如果最小实现成功，通常会看到这样的结构：
-
-```json
-{
-  "success": true,
-  "message": "加入任务链（plan → execute → verify） 执行成功",
-  "data": {
-    "result": {
-      "ok": true,
-      "feature": "task-pipeline"
-    },
-    "logs": [
-      { "stage": "thought", "content": "开始分析任务" },
-      { "stage": "action", "content": "执行 加入任务链（plan → execute → verify） 的核心逻辑" },
-      { "stage": "observation", "content": "加入任务链（plan → execute → verify） 的最小实现已经打通" }
-    ]
-  }
-}
-```
-
-如果你拿不到这个结果，不要急着怀疑模型，先查三件事：
-
-1. `src/routes/index.js` 有没有挂路由
-2. controller 文件名、导入名是否写对
-3. service 有没有正确 export default
+- 每个阶段都要有独立日志
+- 每次状态迁移都要可回放
+- 成功和失败都要能复现
+- 回滚要验证“恢复后仓库是否干净”
 
 ---
 
-## 六、结合你现有项目，这一节具体应该怎么练
+## 六、总结
 
-### 6.1 最推荐的练法
+任务链是项目级 Agent 的骨架。
 
-不要追求一步到位把这一节做到完美，而是按这个顺序走：
+- plan 让系统先想清楚
+- execute 让系统真正做事
+- verify 让系统证明自己做对了
+- rollback 让失败不会变成事故
 
-1. **先把最小路由打通**
-2. **再补 service 真逻辑**
-3. **再加日志**
-4. **最后再考虑 validator / schema / function 定义是否下沉**
+有了这条链，Agent 才从“会聊天的工具”变成“能承担工程责任的执行体”。
 
-这是最稳的节奏。先通，再真，再好看。别反过来。
-
-### 6.2 如果你想把这节接进聊天主链路
-
-你现在项目里已经有：
-
-- `chat.routes.js`
-- `chat.controller.js`
-- `ai.service.js`
-- `functionExecutor`
-- `functions/`
-- `schemas/`
-
-所以当本节能力成熟后，可以继续考虑两种接法：
-
-#### 接法一：独立接口
-适合教学和调试，最容易定位问题。
-
-#### 接法二：接入聊天链路
-适合做真正的 Agent / function calling / tool execution。
-
-也就是说，本节先做独立接口是为了学习效率，不是因为它只能独立存在。
-
----
-
-## 七、常见坑
-
-### 7.1 容易写歪的地方
-
-1. **把所有逻辑都写进 controller**  
-   看起来快，后面改起来会很脏。
-
-2. **一上来就改 chat 主链路**  
-   这很容易把调试复杂度拉满。先独立接口，真的省命。
-
-3. **没有日志**  
-   后面做 Agent / Search / Chunk 时，你会不知道是哪一步错了。
-
-4. **没想清楚这一节能力属于哪层**  
-   结果 route、controller、service 三层职责混乱，最后谁都像打零工的。
-
-### 7.2 建议的调试顺序
-
-出了问题，按这个顺序查：
-
-1. 服务有没有启动
-2. 路由有没有注册
-3. controller 有没有被命中
-4. service 是否正常返回结构
-5. 日志里有没有异常栈
-
-这顺序很土，但很有效。别一出错就先怀疑宇宙射线。
-
----
-
-## 八、小结
-
-这一节的关键，不是“我又学了一个新名词”，而是：
-
-- 我知道怎样把 **加入任务链（plan → execute → verify）** 放进一套真实后端工程
-- 我知道 route / controller / service 该怎么配合
-- 我知道怎样用最小接口把能力打通
-- 我知道怎样为后续的 Agent、MCP、Embedding、Chunking 铺路
-
-如果你能按这篇文档真的在 `AI-backend` 里敲完一次，这节才算学到了。
-
-否则就还是那种很熟悉的状态：字都认识，项目不会长。
+下一节，我们就把这套能力放进一次真实项目演练里，看看它是否真的能跑通。

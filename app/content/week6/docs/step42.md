@@ -1,388 +1,179 @@
-# Step 42: 整理 Agent Demo
+# Step 42: ReAct 多步 Agent｜整理 Agent Demo
 
 ## 学习目标
 
-这一节不再写成“看起来像懂了”的纯讲义，而是直接以你已经实现过的项目 **`/Users/jianglin/Desktop/backend/AI-backend`** 为练习底座，讲清楚 **整理 Agent Demo** 应该怎么落进一套真实 Node 后端工程里。
+这个任务的本质是回答一个核心问题：**当你把 ReAct、工具选择、评测和安全控制都做完之后，怎样把它整理成一个真正能展示、能复盘、能继续扩展的 Demo？**
 
-做完本节后，你应该能：
+通过本教程，你将：
 
-1. 说清楚这项能力该落在哪一层（route / controller / service / adapter / utils）
-2. 在 `AI-backend` 现有目录结构下继续扩展，而不是另起炉灶
-3. 按步骤新增文件、修改入口、跑接口、看日志
-4. 为后续 week 的 Agent / RAG / 工具系统打基础
-
-> **本节目标：** 把本周能力整理成一个统一 demo 接口。
+1. 回顾整套 ReAct Agent 的架构
+2. 学会把 prompt、loop、tool、bench、guard 组合成 Demo
+3. 明白如何输出一份能演示、能调试的执行报告
+4. 为下一周的更大规模 Agent 能力做好衔接
 
 ---
 
-## 一、本节内容应该落到你项目的哪里？
+## 一、先回头看：一个完整 Demo 应该包含什么？
 
-你现在这个项目已经不是初学 demo，而是一个分层比较清楚的后端工程：
+到这一节为止，你已经有了几块关键能力：
 
 ```
-AI-backend/
-├── src/
-│   ├── routes/
-│   ├── controllers/
-│   ├── services/
-│   ├── adapters/
-│   ├── middleware/
-│   ├── validators/
-│   └── utils/
-├── functions/
-├── schemas/
-└── server.js
+Prompt 模板
+   ↓
+Thought / Action / Observation 循环
+   ↓
+工具路由
+   ↓
+复杂任务评测
+   ↓
+超时 / maxSteps / fail-safe
+   ↓
+Demo 输出
 ```
 
-所以学这一节时，不要再问“我要不要新建一个 demo 项目”。答案是不需要。你应该直接在这套工程里继续长能力。
+### 1.1 Demo 不是“能跑一次”，而是“能被看懂”
 
-### 1.1 本节推荐落点
+一个好的 Agent Demo 至少要让人看见三件事：
 
-围绕 **整理 Agent Demo**，建议这样放：
+1. 它为什么这么想
+2. 它为什么选这个工具
+3. 它为什么在这里停下或继续
 
-- **routes**：暴露测试接口
-- **controllers**：解析请求、组织调用
-- **services**：承载核心业务逻辑
-- **utils / functions / schemas**：放辅助工具、函数定义、结构约束
-- **adapters**：如果本节涉及模型提供商差异，再往这里下沉
-
-### 1.2 本节真正要学会什么
-
-不是“我知道这个名词是什么意思”，而是：
-
-- 我知道这项能力为什么属于 service 层
-- 我知道怎样给它补一个测试接口
-- 我知道如何把执行日志暴露出来，方便调试
-- 我知道下一步它如何继续接到更大的 Agent 或 RAG 链路里
+如果最后只有一句答案，没有 trace、没有指标、没有失败解释，那就还不算完整 Demo。
 
 ---
 
-## 二、先设计实现方案，再动代码
+## 二、机制：把所有能力拼成一个执行链
 
-### 2.1 本节建议新增 / 修改的文件
-
-先不要一上来乱写。建议按下面的文件清单推进：
+你可以把 Demo 的主流程理解成下面这张图：
 
 ```
-src/
-├── routes/
-│   └── agent-demo.routes.js          # 新增：本节练习接口
-├── controllers/
-│   └── agent-demo.controller.js      # 新增：请求入口
-├── services/
-│   └── agent-demo.service.js         # 新增：核心逻辑
-├── routes/index.js               # 修改：挂载新路由
-└── app.js / server.js            # 通常无需改动，除非你要挂更多中间件
+用户问题
+   ↓
+Planner 解析任务
+   ↓
+Tool Router 选工具
+   ↓
+Runner 执行循环
+   ↓
+Guard 负责超时/步数
+   ↓
+Bench 记录结果
+   ↓
+Trace / Report 输出
 ```
 
-如果本节涉及工具定义或函数调用，还可以继续扩：
+### 2.1 这不是“模块堆砌”，而是顺序依赖
 
-```
-functions/
-└── agent-demo.js
-
-schemas/
-└── agent-demo.schema.js
-```
-
-### 2.2 设计原则
-
-这一节建议坚持 4 个原则：
-
-1. **核心逻辑放 service**，不要塞进 controller
-2. **controller 只做请求协调**，不做复杂业务判断
-3. **route 只负责路径和中间件**，别把逻辑写成一锅粥
-4. **先打通最小闭环，再考虑抽象与复用**
-
-这四条很朴素，但很值钱。你后面做 Agent、MCP、RAG 时，能不能不写成事故现场，基本就看它们。
+- 没有 Planner，系统不知道先做什么
+- 没有 Router，系统不知道用哪个工具
+- 没有 Runner，系统不会循环
+- 没有 Guard，系统可能失控
+- 没有 Bench，系统没法证明自己变好了
 
 ---
 
-## 三、代码实操：在 AI-backend 里把这节能力接进去
+## 三、代码：一个 Demo 入口怎么组织？
 
-### 3.1 第一步：先写 service
-
-创建文件：`src/services/agent-demo.service.js`
+下面示例展示一个“总入口”式的 Agent Demo 组织方式。
 
 ```js
-import logger from '../utils/logger.js'
+async function runAgentDemo(question, { planner, router, runner, guard, bench }) {
+  const trace = []
 
-class AgentDemoService {
-  async run(payload = {}) {
-    const startTime = Date.now()
-    const logs = []
+  const plan = await planner(question)
+  trace.push({ stage: 'plan', plan })
 
-    logs.push({ stage: 'thought', content: '开始分析任务' })
-    logs.push({ stage: 'action', content: '执行 整理 Agent Demo 的核心逻辑' })
+  const tool = router(question, plan)
+  trace.push({ stage: 'route', tool: tool?.name })
 
-    const result = {
-      ok: true,
-      feature: 'agent-demo',
-      payload,
-      summary: '整理 Agent Demo 的最小实现已经打通',
-      completedAt: new Date().toISOString(),
-    }
-
-    logs.push({ stage: 'observation', content: result.summary })
-
-    logger.info('agent-demo service completed', {
-      duration: Date.now() - startTime,
+  const result = await guard(() =>
+    runner({
+      question,
+      tool,
+      onTrace: (item) => trace.push(item),
     })
+  )
 
-    return { result, logs }
+  const report = bench
+    ? await bench({ question, result, trace })
+    : { score: null }
+
+  return {
+    ok: result.ok,
+    answer: result.answer,
+    trace,
+    report,
   }
 }
-
-export default new AgentDemoService()
 ```
 
-这一步的目标很简单：**先把输入、执行、结果、日志结构立起来**。
+### 3.1 这段代码的价值
 
-你别嫌它朴素。真正值钱的是这个骨架，因为后面你只需要不断把“假动作”替换成“真逻辑”。
+它把 Demo 的边界定清楚了：
 
-### 3.2 第二步：补 controller
+- `planner` 负责看任务
+- `router` 负责选工具
+- `runner` 负责执行
+- `guard` 负责安全
+- `bench` 负责验证
 
-创建文件：`src/controllers/agent-demo.controller.js`
+也就是说，Demo 不只是一个“聊天接口”，而是一个**可解释的 Agent 执行器**。
 
-```js
-import { success } from '../utils/response.js'
-import agentDemoService from '../services/agent-demo.service.js'
-
-class AgentDemoController {
-  async run(req, res) {
-    const data = await agentDemoService.run(req.body)
-    return res.json(success(data, '整理 Agent Demo 执行成功'))
-  }
-}
-
-export default new AgentDemoController()
-```
-
-为什么这一层要单独保留？因为后面你大概率会在这里做：
-
-- 参数校验结果接入
-- 请求上下文拼装
-- 用户身份 / 权限信息透传
-- 返回结构格式化
-
-如果你一上来全糊进 route，后面很快就会开始骂昨天的自己。
-
-### 3.3 第三步：补 route
-
-创建文件：`src/routes/agent-demo.routes.js`
-
-```js
-import express from 'express'
-import agentDemoController from '../controllers/agent-demo.controller.js'
-import { asyncHandler } from '../utils/asyncHandler.js'
-
-const router = express.Router()
-
-router.post('/agent-demo', asyncHandler(agentDemoController.run.bind(agentDemoController)))
-
-export default router
-```
-
-### 3.4 第四步：挂到总路由
-
-修改文件：`src/routes/index.js`
-
-在顶部新增：
-
-```js
-import agentdemoRoutes from './agent-demo.routes.js'
-```
-
-在路由挂载区新增：
-
-```js
-router.use('/', agentdemoRoutes)
-```
-
-这样本节接口就会进入统一 `/api` 前缀下。
-
-最终你可以通过下面地址访问：
-
-```
-POST /api/agent-demo
-```
-
----
-
-## 四、这节能力该怎么“写真”
-
-上面的代码只是最小骨架。真正练手时，你应该把本节主题替换进来。
-
-### 4.1 围绕“整理 Agent Demo”的真实实现方向
-
-你可以按下面方式升级当前 service：
-
-- 如果这一节偏 **Agent / ReAct / MCP**：
-  - 在 `service.run()` 中增加多阶段日志
-  - 把 thought / action / observation 结构化输出
-  - 让 controller 直接返回完整执行过程
-
-- 如果这一节偏 **Embedding / Search / Chunking**：
-  - 在 service 中增加预处理、索引、检索等步骤
-  - 返回中间结果，如 score、chunk 数量、过滤结果
-  - 方便你在接口层先把链路看清楚
-
-### 4.2 推荐你至少保留这些字段
-
-建议统一返回：
+### 3.2 建议输出什么结果？
 
 ```js
 {
-  result: {},
-  logs: [],
-  meta: {
-    duration: 0,
-    feature: 'agent-demo',
-    step: 42,
+  ok: true,
+  answer: '...',
+  trace: [...],
+  report: {
+    correctness: 1,
+    steps: 3,
+    latencyMs: 842
   }
 }
 ```
 
-因为后面你做复杂能力时，日志和 meta 会非常有用。没有这些字段，调试会像摸黑走楼梯，节目效果很强，工程体验很差。
+这样一来，你演示时就不只是展示“答案”，而是展示“怎么做出来的”。
 
 ---
 
-## 五、如何运行和验证
+## 四、实验与验收：怎么判断 Demo 整理得够不够好？
 
-### 5.1 启动项目
+你可以用下面这份清单验收：
 
-进入项目目录：
+| 项目 | 是否满足 |
+|---|---|
+| 能解释每一步 Thought / Action / Observation |  |
+| 能看出工具是怎么被选中的 |  |
+| 能在超时或步数耗尽时安全退出 |  |
+| 能对复杂任务输出简单报告 |  |
+| 能复现、能调试、能扩展 |  |
 
-```bash
-cd /Users/jianglin/Desktop/backend/AI-backend
-npm install
-npm run dev
-```
+### 4.1 Demo 的“好看”不是关键，“可复用”才是关键
 
-如果启动正常，你应该看到类似输出：
+一个好 Demo 不应该只是“某次运行效果不错”，而应该是：
 
-```bash
-🚀 Server ready at http://localhost:3000
-```
-
-> 端口以你的 `.env` / config 实际配置为准。
-
-### 5.2 调接口验证
-
-你可以直接用 curl 或 Apifox / Postman 测试：
-
-```bash
-curl -X POST http://localhost:3000/api/agent-demo   -H 'Content-Type: application/json'   -d '{
-    "input": "test 整理 Agent Demo",
-    "debug": true
-  }'
-```
-
-### 5.3 预期返回
-
-如果最小实现成功，通常会看到这样的结构：
-
-```json
-{
-  "success": true,
-  "message": "整理 Agent Demo 执行成功",
-  "data": {
-    "result": {
-      "ok": true,
-      "feature": "agent-demo"
-    },
-    "logs": [
-      { "stage": "thought", "content": "开始分析任务" },
-      { "stage": "action", "content": "执行 整理 Agent Demo 的核心逻辑" },
-      { "stage": "observation", "content": "整理 Agent Demo 的最小实现已经打通" }
-    ]
-  }
-}
-```
-
-如果你拿不到这个结果，不要急着怀疑模型，先查三件事：
-
-1. `src/routes/index.js` 有没有挂路由
-2. controller 文件名、导入名是否写对
-3. service 有没有正确 export default
+- 新任务能接进来
+- 新工具能挂进去
+- 新评测能加进去
+- 新限制能拦住它
 
 ---
 
-## 六、结合你现有项目，这一节具体应该怎么练
+## 五、小结与衔接：这周学完，你已经有了一个完整 Agent 骨架
 
-### 6.1 最推荐的练法
+Week 6 的终点不是“我知道 ReAct 是什么”，而是：
 
-不要追求一步到位把这一节做到完美，而是按这个顺序走：
+> **我已经能把 ReAct 做成一套可运行、可观察、可评测、可控制的 Agent Demo。**
 
-1. **先把最小路由打通**
-2. **再补 service 真逻辑**
-3. **再加日志**
-4. **最后再考虑 validator / schema / function 定义是否下沉**
+往下一周走时，最自然的延伸方向通常会是：
 
-这是最稳的节奏。先通，再真，再好看。别反过来。
+- 更长任务的状态管理
+- 更稳的记忆或上下文组织
+- 更细的计划与执行分离
+- 更完整的端到端工作流
 
-### 6.2 如果你想把这节接进聊天主链路
+只要你把这一周的 Demo 整理好，后面的 Agent 能力就不是重新开始，而是在同一套骨架上继续长大。
 
-你现在项目里已经有：
-
-- `chat.routes.js`
-- `chat.controller.js`
-- `ai.service.js`
-- `functionExecutor`
-- `functions/`
-- `schemas/`
-
-所以当本节能力成熟后，可以继续考虑两种接法：
-
-#### 接法一：独立接口
-适合教学和调试，最容易定位问题。
-
-#### 接法二：接入聊天链路
-适合做真正的 Agent / function calling / tool execution。
-
-也就是说，本节先做独立接口是为了学习效率，不是因为它只能独立存在。
-
----
-
-## 七、常见坑
-
-### 7.1 容易写歪的地方
-
-1. **把所有逻辑都写进 controller**  
-   看起来快，后面改起来会很脏。
-
-2. **一上来就改 chat 主链路**  
-   这很容易把调试复杂度拉满。先独立接口，真的省命。
-
-3. **没有日志**  
-   后面做 Agent / Search / Chunk 时，你会不知道是哪一步错了。
-
-4. **没想清楚这一节能力属于哪层**  
-   结果 route、controller、service 三层职责混乱，最后谁都像打零工的。
-
-### 7.2 建议的调试顺序
-
-出了问题，按这个顺序查：
-
-1. 服务有没有启动
-2. 路由有没有注册
-3. controller 有没有被命中
-4. service 是否正常返回结构
-5. 日志里有没有异常栈
-
-这顺序很土，但很有效。别一出错就先怀疑宇宙射线。
-
----
-
-## 八、小结
-
-这一节的关键，不是“我又学了一个新名词”，而是：
-
-- 我知道怎样把 **整理 Agent Demo** 放进一套真实后端工程
-- 我知道 route / controller / service 该怎么配合
-- 我知道怎样用最小接口把能力打通
-- 我知道怎样为后续的 Agent、MCP、Embedding、Chunking 铺路
-
-如果你能按这篇文档真的在 `AI-backend` 里敲完一次，这节才算学到了。
-
-否则就还是那种很熟悉的状态：字都认识，项目不会长。

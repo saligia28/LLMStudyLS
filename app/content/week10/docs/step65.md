@@ -1,388 +1,188 @@
-# Step 65: 对不同 chunk 长度做实验
+# Step 65: Chunking｜对不同 chunk 长度做实验
 
 ## 学习目标
 
-这一节不再写成“看起来像懂了”的纯讲义，而是直接以你已经实现过的项目 **`/Users/jianglin/Desktop/backend/AI-backend`** 为练习底座，讲清楚 **对不同 chunk 长度做实验** 应该怎么落进一套真实 Node 后端工程里。
+这一节要把“我感觉这个参数差不多”变成“我知道这个参数为什么更好”。
 
-做完本节后，你应该能：
+完成后你应该能：
 
-1. 说清楚这项能力该落在哪一层（route / controller / service / adapter / utils）
-2. 在 `AI-backend` 现有目录结构下继续扩展，而不是另起炉灶
-3. 按步骤新增文件、修改入口、跑接口、看日志
-4. 为后续 week 的 Agent / RAG / 工具系统打基础
+1. 设计 chunk size 与 overlap 的对照实验
+2. 选出适合自己文档类型的观测指标
+3. 用 Node.js 写出一个最小实验脚本
+4. 读懂实验结果，并把结果转成下一轮优化方向
 
-> **本节目标：** 比较不同 chunk 参数效果。
-
----
-
-## 一、本节内容应该落到你项目的哪里？
-
-你现在这个项目已经不是初学 demo，而是一个分层比较清楚的后端工程：
-
-```
-AI-backend/
-├── src/
-│   ├── routes/
-│   ├── controllers/
-│   ├── services/
-│   ├── adapters/
-│   ├── middleware/
-│   ├── validators/
-│   └── utils/
-├── functions/
-├── schemas/
-└── server.js
-```
-
-所以学这一节时，不要再问“我要不要新建一个 demo 项目”。答案是不需要。你应该直接在这套工程里继续长能力。
-
-### 1.1 本节推荐落点
-
-围绕 **对不同 chunk 长度做实验**，建议这样放：
-
-- **routes**：暴露测试接口
-- **controllers**：解析请求、组织调用
-- **services**：承载核心业务逻辑
-- **utils / functions / schemas**：放辅助工具、函数定义、结构约束
-- **adapters**：如果本节涉及模型提供商差异，再往这里下沉
-
-### 1.2 本节真正要学会什么
-
-不是“我知道这个名词是什么意思”，而是：
-
-- 我知道这项能力为什么属于 service 层
-- 我知道怎样给它补一个测试接口
-- 我知道如何把执行日志暴露出来，方便调试
-- 我知道下一步它如何继续接到更大的 Agent 或 RAG 链路里
+> 如果说 Step 64 是“理解怎么切”，那么这一步就是“证明为什么这么切”。没有实验，chunk 讨论很容易停留在玄学。
 
 ---
 
-## 二、先设计实现方案，再动代码
+## 一、实验到底在验证什么
 
-### 2.1 本节建议新增 / 修改的文件
+chunk 长度不是越大越好，也不是越小越好。我们真正想验证的是：
 
-先不要一上来乱写。建议按下面的文件清单推进：
-
-```
-src/
-├── routes/
-│   └── chunk-exp.routes.js          # 新增：本节练习接口
-├── controllers/
-│   └── chunk-exp.controller.js      # 新增：请求入口
-├── services/
-│   └── chunk-exp.service.js         # 新增：核心逻辑
-├── routes/index.js               # 修改：挂载新路由
-└── app.js / server.js            # 通常无需改动，除非你要挂更多中间件
+```text
+不同 chunkSize / overlap / 切分策略
+  会怎样影响
+检索命中率、召回排名、上下文噪声、索引成本、答案完整度
 ```
 
-如果本节涉及工具定义或函数调用，还可以继续扩：
+### 实验里最重要的变量
 
-```
-functions/
-└── chunk-exp.js
+| 变量 | 说明 |
+| --- | --- |
+| `chunkSize` | 每个 chunk 的长度，通常先按 token 或近似 token 估算 |
+| `overlap` | 相邻 chunk 共享的内容长度 |
+| `strategy` | fixed / sliding / semantic |
+| `k` | 召回 Top-K 的数量 |
+| `corpus` | 你用于测试的文档集合 |
+| `questions` | 你为文档准备的测试问题 |
 
-schemas/
-└── chunk-exp.schema.js
-```
+### 实验里最重要的指标
 
-### 2.2 设计原则
+| 指标 | 看什么 |
+| --- | --- |
+| `recall@k` | 正确答案是否出现在 Top-K 召回里 |
+| `MRR` | 正确 chunk 越靠前越好 |
+| `coverage` | 回答需要的信息是否被 chunk 覆盖完整 |
+| `chunk_count` | 切完以后生成了多少条 chunk |
+| `avg_tokens` | 每个 chunk 的平均长度 |
+| `ingest_time` | 切分与入库耗时 |
+| `retrieval_noise` | 召回结果里无关 chunk 的比例 |
 
-这一节建议坚持 4 个原则：
-
-1. **核心逻辑放 service**，不要塞进 controller
-2. **controller 只做请求协调**，不做复杂业务判断
-3. **route 只负责路径和中间件**，别把逻辑写成一锅粥
-4. **先打通最小闭环，再考虑抽象与复用**
-
-这四条很朴素，但很值钱。你后面做 Agent、MCP、RAG 时，能不能不写成事故现场，基本就看它们。
+实验的关键不是“指标越多越专业”，而是你要知道每个指标回答的是哪类问题。
 
 ---
 
-## 三、代码实操：在 AI-backend 里把这节能力接进去
+## 二、先做实验设计，再写代码
 
-### 3.1 第一步：先写 service
+### 2.1 推荐的对照方式
 
-创建文件：`src/services/chunk-exp.service.js`
+先固定文档、固定问题集、固定 embedding 模型、固定向量库，只改变 chunk 参数。
+
+```text
+唯一可变因素：chunkSize / overlap / strategy
+其余条件：全部保持一致
+```
+
+这样你才能把结果和 chunk 本身绑定起来，而不是把模型波动、索引波动、问题集波动都混进去。
+
+### 2.2 一个可直接使用的实验矩阵
 
 ```js
-import logger from '../utils/logger.js'
+const configs = [
+  { strategy: 'fixed', chunkSize: 256, overlap: 0 },
+  { strategy: 'sliding', chunkSize: 256, overlap: 64 },
+  { strategy: 'fixed', chunkSize: 512, overlap: 0 },
+  { strategy: 'sliding', chunkSize: 512, overlap: 128 },
+  { strategy: 'semantic', chunkSize: 700, overlap: 120 },
+]
+```
 
-class ChunkExpService {
-  async run(payload = {}) {
-    const startTime = Date.now()
-    const logs = []
+### 2.3 先准备“金标准问题集”
 
-    logs.push({ stage: 'thought', content: '开始分析任务' })
-    logs.push({ stage: 'action', content: '执行 对不同 chunk 长度做实验 的核心逻辑' })
+问题集最好来自真实文档，而不是泛泛而谈的“这个文档讲了什么”。更推荐这类题目：
 
-    const result = {
-      ok: true,
-      feature: 'chunk-exp',
-      payload,
-      summary: '对不同 chunk 长度做实验 的最小实现已经打通',
-      completedAt: new Date().toISOString(),
+- 某个概念定义是什么
+- 某个参数范围是多少
+- 某个步骤的前后关系是什么
+- 某个表格里的值是多少
+- 某段代码的作用是什么
+
+好的问题集应该能明确判断“命中”与“未命中”。
+
+---
+
+## 三、一个最小实验脚本
+
+下面这个脚本不依赖复杂框架，核心是把“切分 -> 检索 -> 评分”串起来。
+
+```js
+function evaluateRecallAtK(retrievedChunks, goldenChunkId, k = 5) {
+  const topK = retrievedChunks.slice(0, k)
+  return topK.some(chunk => chunk.id === goldenChunkId) ? 1 : 0
+}
+
+async function runChunkExperiment({ docs, questions, configs, buildChunks, search }) {
+  const rows = []
+
+  for (const config of configs) {
+    const chunks = buildChunks(docs, config)
+    const metrics = {
+      hits: 0,
+      mrrSum: 0,
+      questionCount: questions.length,
+      chunkCount: chunks.length,
+      totalTokens: 0,
     }
 
-    logs.push({ stage: 'observation', content: result.summary })
+    for (const chunk of chunks) {
+      metrics.totalTokens += chunk.tokenCount ?? 0
+    }
 
-    logger.info('chunk-exp service completed', {
-      duration: Date.now() - startTime,
+    for (const question of questions) {
+      const retrieved = await search(question.text, chunks, 5)
+      const hit = evaluateRecallAtK(retrieved, question.goldenChunkId, 5)
+      metrics.hits += hit
+
+      const rank = retrieved.findIndex(chunk => chunk.id === question.goldenChunkId)
+      if (rank >= 0) metrics.mrrSum += 1 / (rank + 1)
+    }
+
+    rows.push({
+      strategy: config.strategy,
+      chunkSize: config.chunkSize,
+      overlap: config.overlap,
+      recallAt5: metrics.hits / metrics.questionCount,
+      mrr: metrics.mrrSum / metrics.questionCount,
+      avgTokens: Math.round(metrics.totalTokens / metrics.chunkCount),
+      chunkCount: metrics.chunkCount,
     })
-
-    return { result, logs }
   }
-}
 
-export default new ChunkExpService()
-```
-
-这一步的目标很简单：**先把输入、执行、结果、日志结构立起来**。
-
-你别嫌它朴素。真正值钱的是这个骨架，因为后面你只需要不断把“假动作”替换成“真逻辑”。
-
-### 3.2 第二步：补 controller
-
-创建文件：`src/controllers/chunk-exp.controller.js`
-
-```js
-import { success } from '../utils/response.js'
-import chunkExpService from '../services/chunk-exp.service.js'
-
-class ChunkExpController {
-  async run(req, res) {
-    const data = await chunkExpService.run(req.body)
-    return res.json(success(data, '对不同 chunk 长度做实验 执行成功'))
-  }
-}
-
-export default new ChunkExpController()
-```
-
-为什么这一层要单独保留？因为后面你大概率会在这里做：
-
-- 参数校验结果接入
-- 请求上下文拼装
-- 用户身份 / 权限信息透传
-- 返回结构格式化
-
-如果你一上来全糊进 route，后面很快就会开始骂昨天的自己。
-
-### 3.3 第三步：补 route
-
-创建文件：`src/routes/chunk-exp.routes.js`
-
-```js
-import express from 'express'
-import chunkExpController from '../controllers/chunk-exp.controller.js'
-import { asyncHandler } from '../utils/asyncHandler.js'
-
-const router = express.Router()
-
-router.post('/chunk-exp', asyncHandler(chunkExpController.run.bind(chunkExpController)))
-
-export default router
-```
-
-### 3.4 第四步：挂到总路由
-
-修改文件：`src/routes/index.js`
-
-在顶部新增：
-
-```js
-import chunkexpRoutes from './chunk-exp.routes.js'
-```
-
-在路由挂载区新增：
-
-```js
-router.use('/', chunkexpRoutes)
-```
-
-这样本节接口就会进入统一 `/api` 前缀下。
-
-最终你可以通过下面地址访问：
-
-```
-POST /api/chunk-exp
-```
-
----
-
-## 四、这节能力该怎么“写真”
-
-上面的代码只是最小骨架。真正练手时，你应该把本节主题替换进来。
-
-### 4.1 围绕“对不同 chunk 长度做实验”的真实实现方向
-
-你可以按下面方式升级当前 service：
-
-- 如果这一节偏 **Agent / ReAct / MCP**：
-  - 在 `service.run()` 中增加多阶段日志
-  - 把 thought / action / observation 结构化输出
-  - 让 controller 直接返回完整执行过程
-
-- 如果这一节偏 **Embedding / Search / Chunking**：
-  - 在 service 中增加预处理、索引、检索等步骤
-  - 返回中间结果，如 score、chunk 数量、过滤结果
-  - 方便你在接口层先把链路看清楚
-
-### 4.2 推荐你至少保留这些字段
-
-建议统一返回：
-
-```js
-{
-  result: {},
-  logs: [],
-  meta: {
-    duration: 0,
-    feature: 'chunk-exp',
-    step: 65,
-  }
+  console.table(rows)
+  return rows
 }
 ```
 
-因为后面你做复杂能力时，日志和 meta 会非常有用。没有这些字段，调试会像摸黑走楼梯，节目效果很强，工程体验很差。
+这个脚本只负责实验框架，不负责 embedding 的细节。这样做的好处是：你能先把 chunk 策略本身的影响看清楚。
 
 ---
 
-## 五、如何运行和验证
+## 四、怎么看结果
 
-### 5.1 启动项目
+实验结果不要只看“谁最高”，还要看“为什么最高”。
 
-进入项目目录：
+### 一个示意表
 
-```bash
-cd /Users/jianglin/Desktop/backend/AI-backend
-npm install
-npm run dev
-```
+| strategy | chunkSize | overlap | recall@5 | mrr | avgTokens | 观察 |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| fixed | 256 | 0 | 0.62 | 0.38 | 180 | 很碎，命中容易但上下文不完整 |
+| sliding | 256 | 64 | 0.74 | 0.49 | 190 | 边界命中明显更稳 |
+| fixed | 512 | 0 | 0.71 | 0.45 | 365 | 上下文更完整，但噪声也更多 |
+| sliding | 512 | 128 | 0.81 | 0.58 | 380 | 常见的比较平衡区间 |
+| semantic | 700 | 120 | 0.84 | 0.63 | 430 | 结构化文档通常更占优 |
 
-如果启动正常，你应该看到类似输出：
+> 上表是示意，不是结论。你自己的文档类型、问题类型和 embedding 模型不同，最优点也会不同。
 
-```bash
-🚀 Server ready at http://localhost:3000
-```
+### 如何解释这些结果
 
-> 端口以你的 `.env` / config 实际配置为准。
-
-### 5.2 调接口验证
-
-你可以直接用 curl 或 Apifox / Postman 测试：
-
-```bash
-curl -X POST http://localhost:3000/api/chunk-exp   -H 'Content-Type: application/json'   -d '{
-    "input": "test 对不同 chunk 长度做实验",
-    "debug": true
-  }'
-```
-
-### 5.3 预期返回
-
-如果最小实现成功，通常会看到这样的结构：
-
-```json
-{
-  "success": true,
-  "message": "对不同 chunk 长度做实验 执行成功",
-  "data": {
-    "result": {
-      "ok": true,
-      "feature": "chunk-exp"
-    },
-    "logs": [
-      { "stage": "thought", "content": "开始分析任务" },
-      { "stage": "action", "content": "执行 对不同 chunk 长度做实验 的核心逻辑" },
-      { "stage": "observation", "content": "对不同 chunk 长度做实验 的最小实现已经打通" }
-    ]
-  }
-}
-```
-
-如果你拿不到这个结果，不要急着怀疑模型，先查三件事：
-
-1. `src/routes/index.js` 有没有挂路由
-2. controller 文件名、导入名是否写对
-3. service 有没有正确 export default
+1. **chunk 太小**：召回可能高一点，但答案上下文不完整，LLM 还要自己补。
+2. **chunk 太大**：chunk 内主题混杂，检索结果噪声更大。
+3. **有 overlap**：边界命中会更稳，但索引和 rerank 成本会上升。
+4. **语义切分**：对结构良好的 Markdown、教程、规范类文档通常更占优势。
 
 ---
 
-## 六、结合你现有项目，这一节具体应该怎么练
+## 五、把实验结果转成下一步动作
 
-### 6.1 最推荐的练法
+实验做完，不是为了写一张漂亮表格，而是为了回答下一轮问题：
 
-不要追求一步到位把这一节做到完美，而是按这个顺序走：
+- 如果 recall@5 很高，但答案质量差，说明 chunk 可能太大、噪声太高
+- 如果 recall@5 很低，但 chunk 很小，说明你切碎了关键语义
+- 如果 semantic 比 fixed 明显好，说明你的文档结构本身适合按标题和段落切
+- 如果 overlap 提升不明显，就不要盲目加大 overlap
 
-1. **先把最小路由打通**
-2. **再补 service 真逻辑**
-3. **再加日志**
-4. **最后再考虑 validator / schema / function 定义是否下沉**
+### 一句话原则
 
-这是最稳的节奏。先通，再真，再好看。别反过来。
+**先用实验找到“最低成本的足够好”，再去追求更复杂的切分策略。**
 
-### 6.2 如果你想把这节接进聊天主链路
-
-你现在项目里已经有：
-
-- `chat.routes.js`
-- `chat.controller.js`
-- `ai.service.js`
-- `functionExecutor`
-- `functions/`
-- `schemas/`
-
-所以当本节能力成熟后，可以继续考虑两种接法：
-
-#### 接法一：独立接口
-适合教学和调试，最容易定位问题。
-
-#### 接法二：接入聊天链路
-适合做真正的 Agent / function calling / tool execution。
-
-也就是说，本节先做独立接口是为了学习效率，不是因为它只能独立存在。
-
----
-
-## 七、常见坑
-
-### 7.1 容易写歪的地方
-
-1. **把所有逻辑都写进 controller**  
-   看起来快，后面改起来会很脏。
-
-2. **一上来就改 chat 主链路**  
-   这很容易把调试复杂度拉满。先独立接口，真的省命。
-
-3. **没有日志**  
-   后面做 Agent / Search / Chunk 时，你会不知道是哪一步错了。
-
-4. **没想清楚这一节能力属于哪层**  
-   结果 route、controller、service 三层职责混乱，最后谁都像打零工的。
-
-### 7.2 建议的调试顺序
-
-出了问题，按这个顺序查：
-
-1. 服务有没有启动
-2. 路由有没有注册
-3. controller 有没有被命中
-4. service 是否正常返回结构
-5. 日志里有没有异常栈
-
-这顺序很土，但很有效。别一出错就先怀疑宇宙射线。
-
----
-
-## 八、小结
-
-这一节的关键，不是“我又学了一个新名词”，而是：
-
-- 我知道怎样把 **对不同 chunk 长度做实验** 放进一套真实后端工程
-- 我知道 route / controller / service 该怎么配合
-- 我知道怎样用最小接口把能力打通
-- 我知道怎样为后续的 Agent、MCP、Embedding、Chunking 铺路
-
-如果你能按这篇文档真的在 `AI-backend` 里敲完一次，这节才算学到了。
-
-否则就还是那种很熟悉的状态：字都认识，项目不会长。
+这比一开始就上最复杂的语义切分更稳，也更符合真实工程。

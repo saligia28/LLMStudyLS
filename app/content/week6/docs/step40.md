@@ -1,388 +1,158 @@
-# Step 40: 测试复杂任务（翻译、问答、推理）
+# Step 40: ReAct 多步 Agent｜测试复杂任务（翻译、问答、推理）
 
 ## 学习目标
 
-这一节不再写成“看起来像懂了”的纯讲义，而是直接以你已经实现过的项目 **`/Users/jianglin/Desktop/backend/AI-backend`** 为练习底座，讲清楚 **测试复杂任务（翻译、问答、推理）** 应该怎么落进一套真实 Node 后端工程里。
+这个任务的本质是回答一个核心问题：**复杂任务的 Agent，到底应该怎么测，才能看出它是真会做事，还是只是在某些例子上碰巧答对？**
 
-做完本节后，你应该能：
+通过本教程，你将：
 
-1. 说清楚这项能力该落在哪一层（route / controller / service / adapter / utils）
-2. 在 `AI-backend` 现有目录结构下继续扩展，而不是另起炉灶
-3. 按步骤新增文件、修改入口、跑接口、看日志
-4. 为后续 week 的 Agent / RAG / 工具系统打基础
-
-> **本节目标：** 设计复杂任务用例，验证 Agent 表现。
+1. 理解为什么复杂任务不能只看最终答案
+2. 学会设计适合 ReAct 的任务基准
+3. 学会给复杂任务定义可观察指标
+4. 用 benchmark 思维验证 Agent 的真实能力
 
 ---
 
-## 一、本节内容应该落到你项目的哪里？
+## 一、为什么复杂任务不能只看“答对没”？
 
-你现在这个项目已经不是初学 demo，而是一个分层比较清楚的后端工程：
+在 ReAct 系统里，很多任务不是单轮问答，而是包含：
 
-```
-AI-backend/
-├── src/
-│   ├── routes/
-│   ├── controllers/
-│   ├── services/
-│   ├── adapters/
-│   ├── middleware/
-│   ├── validators/
-│   └── utils/
-├── functions/
-├── schemas/
-└── server.js
-```
+- 多步搜索
+- 多轮判断
+- 工具选择
+- 证据整合
 
-所以学这一节时，不要再问“我要不要新建一个 demo 项目”。答案是不需要。你应该直接在这套工程里继续长能力。
+所以“最终答案看起来对”并不代表过程健康。一个 Agent 可能：
 
-### 1.1 本节推荐落点
+1. 走了很多冤枉路
+2. 选错工具但碰巧答对
+3. 结果正确，但没有可解释性
 
-围绕 **测试复杂任务（翻译、问答、推理）**，建议这样放：
+这就是为什么我们需要一套更像“实验设计”的测试方法。
 
-- **routes**：暴露测试接口
-- **controllers**：解析请求、组织调用
-- **services**：承载核心业务逻辑
-- **utils / functions / schemas**：放辅助工具、函数定义、结构约束
-- **adapters**：如果本节涉及模型提供商差异，再往这里下沉
+### 1.1 复杂任务的评测目标
 
-### 1.2 本节真正要学会什么
-
-不是“我知道这个名词是什么意思”，而是：
-
-- 我知道这项能力为什么属于 service 层
-- 我知道怎样给它补一个测试接口
-- 我知道如何把执行日志暴露出来，方便调试
-- 我知道下一步它如何继续接到更大的 Agent 或 RAG 链路里
+- 看答案是否正确
+- 看过程是否合理
+- 看工具是否用对
+- 看是不是稳定可复现
 
 ---
 
-## 二、先设计实现方案，再动代码
+## 二、机制：把复杂任务拆成可测项
 
-### 2.1 本节建议新增 / 修改的文件
+推荐把任务分成三类：
 
-先不要一上来乱写。建议按下面的文件清单推进：
+| 类型 | 例子 | 重点 |
+|---|---|---|
+| 翻译 | 中英互译 | 准确性、语义保持 |
+| 问答 | 查资料后回答 | 证据使用、引用 |
+| 推理 | 比较、归纳、判断 | 多步过程、工具选择 |
 
-```
-src/
-├── routes/
-│   └── agent-eval.routes.js          # 新增：本节练习接口
-├── controllers/
-│   └── agent-eval.controller.js      # 新增：请求入口
-├── services/
-│   └── agent-eval.service.js         # 新增：核心逻辑
-├── routes/index.js               # 修改：挂载新路由
-└── app.js / server.js            # 通常无需改动，除非你要挂更多中间件
-```
-
-如果本节涉及工具定义或函数调用，还可以继续扩：
-
-```
-functions/
-└── agent-eval.js
-
-schemas/
-└── agent-eval.schema.js
-```
-
-### 2.2 设计原则
-
-这一节建议坚持 4 个原则：
-
-1. **核心逻辑放 service**，不要塞进 controller
-2. **controller 只做请求协调**，不做复杂业务判断
-3. **route 只负责路径和中间件**，别把逻辑写成一锅粥
-4. **先打通最小闭环，再考虑抽象与复用**
-
-这四条很朴素，但很值钱。你后面做 Agent、MCP、RAG 时，能不能不写成事故现场，基本就看它们。
-
----
-
-## 三、代码实操：在 AI-backend 里把这节能力接进去
-
-### 3.1 第一步：先写 service
-
-创建文件：`src/services/agent-eval.service.js`
+### 2.1 一条好的 benchmark 记录应该包含什么？
 
 ```js
-import logger from '../utils/logger.js'
+{
+  id: 'task-01',
+  type: 'qa',
+  question: '北京和上海今天哪个更适合户外活动？',
+  goldAnswer: '上海更适合',
+  evidence: ['北京多云有风', '上海晴朗微风'],
+  allowedTools: ['search'],
+  expectedSteps: 2
+}
+```
 
-class AgentEvalService {
-  async run(payload = {}) {
-    const startTime = Date.now()
-    const logs = []
+这样设计的好处是，后面你不仅能测“对不对”，还能测“有没有按预期方式解决”。
 
-    logs.push({ stage: 'thought', content: '开始分析任务' })
-    logs.push({ stage: 'action', content: '执行 测试复杂任务（翻译、问答、推理） 的核心逻辑' })
+---
 
-    const result = {
-      ok: true,
-      feature: 'agent-eval',
-      payload,
-      summary: '测试复杂任务（翻译、问答、推理） 的最小实现已经打通',
-      completedAt: new Date().toISOString(),
-    }
+## 三、代码：一个简单的任务基准跑分器
 
-    logs.push({ stage: 'observation', content: result.summary })
+下面的例子展示如何跑一组任务，并记录结果。
 
-    logger.info('agent-eval service completed', {
-      duration: Date.now() - startTime,
+```js
+const benchmarks = [
+  {
+    id: 't1',
+    type: 'translation',
+    input: 'Translate: ReAct enables reasoning and acting.',
+    gold: 'ReAct 让推理和行动结合起来。',
+  },
+  {
+    id: 't2',
+    type: 'qa',
+    input: 'Which city is better for outdoor activities today?',
+    goldKeywords: ['Shanghai', 'better'],
+  },
+]
+
+function evaluateText(answer, task) {
+  if (task.gold) return answer.includes(task.gold) ? 1 : 0
+  if (task.goldKeywords) {
+    return task.goldKeywords.every((k) => answer.toLowerCase().includes(k.toLowerCase())) ? 1 : 0
+  }
+  return 0
+}
+
+async function runBench(agent) {
+  const results = []
+
+  for (const task of benchmarks) {
+    const start = Date.now()
+    const output = await agent(task.input)
+    results.push({
+      id: task.id,
+      type: task.type,
+      score: evaluateText(output.answer ?? output, task),
+      steps: output.trace?.length ?? 0,
+      latencyMs: Date.now() - start,
     })
-
-    return { result, logs }
   }
-}
 
-export default new AgentEvalService()
-```
-
-这一步的目标很简单：**先把输入、执行、结果、日志结构立起来**。
-
-你别嫌它朴素。真正值钱的是这个骨架，因为后面你只需要不断把“假动作”替换成“真逻辑”。
-
-### 3.2 第二步：补 controller
-
-创建文件：`src/controllers/agent-eval.controller.js`
-
-```js
-import { success } from '../utils/response.js'
-import agentEvalService from '../services/agent-eval.service.js'
-
-class AgentEvalController {
-  async run(req, res) {
-    const data = await agentEvalService.run(req.body)
-    return res.json(success(data, '测试复杂任务（翻译、问答、推理） 执行成功'))
-  }
-}
-
-export default new AgentEvalController()
-```
-
-为什么这一层要单独保留？因为后面你大概率会在这里做：
-
-- 参数校验结果接入
-- 请求上下文拼装
-- 用户身份 / 权限信息透传
-- 返回结构格式化
-
-如果你一上来全糊进 route，后面很快就会开始骂昨天的自己。
-
-### 3.3 第三步：补 route
-
-创建文件：`src/routes/agent-eval.routes.js`
-
-```js
-import express from 'express'
-import agentEvalController from '../controllers/agent-eval.controller.js'
-import { asyncHandler } from '../utils/asyncHandler.js'
-
-const router = express.Router()
-
-router.post('/agent-eval', asyncHandler(agentEvalController.run.bind(agentEvalController)))
-
-export default router
-```
-
-### 3.4 第四步：挂到总路由
-
-修改文件：`src/routes/index.js`
-
-在顶部新增：
-
-```js
-import agentevalRoutes from './agent-eval.routes.js'
-```
-
-在路由挂载区新增：
-
-```js
-router.use('/', agentevalRoutes)
-```
-
-这样本节接口就会进入统一 `/api` 前缀下。
-
-最终你可以通过下面地址访问：
-
-```
-POST /api/agent-eval
-```
-
----
-
-## 四、这节能力该怎么“写真”
-
-上面的代码只是最小骨架。真正练手时，你应该把本节主题替换进来。
-
-### 4.1 围绕“测试复杂任务（翻译、问答、推理）”的真实实现方向
-
-你可以按下面方式升级当前 service：
-
-- 如果这一节偏 **Agent / ReAct / MCP**：
-  - 在 `service.run()` 中增加多阶段日志
-  - 把 thought / action / observation 结构化输出
-  - 让 controller 直接返回完整执行过程
-
-- 如果这一节偏 **Embedding / Search / Chunking**：
-  - 在 service 中增加预处理、索引、检索等步骤
-  - 返回中间结果，如 score、chunk 数量、过滤结果
-  - 方便你在接口层先把链路看清楚
-
-### 4.2 推荐你至少保留这些字段
-
-建议统一返回：
-
-```js
-{
-  result: {},
-  logs: [],
-  meta: {
-    duration: 0,
-    feature: 'agent-eval',
-    step: 40,
-  }
+  return results
 }
 ```
 
-因为后面你做复杂能力时，日志和 meta 会非常有用。没有这些字段，调试会像摸黑走楼梯，节目效果很强，工程体验很差。
+### 3.1 为什么要记录 `steps` 和 `latencyMs`？
+
+因为复杂任务的质量不只取决于“有没有答对”，还取决于：
+
+- 过程是不是过长
+- 是否频繁浪费工具调用
+- 是否因为策略问题变慢
+
+这些指标能帮助你定位问题是出在 prompt、路由，还是循环控制。
 
 ---
 
-## 五、如何运行和验证
+## 四、实验与调试：看评测时要看什么？
 
-### 5.1 启动项目
+建议你把结果拆成四个维度：
 
-进入项目目录：
+| 指标 | 看什么 |
+|---|---|
+| 正确率 | 最终答案是否命中 |
+| 工具命中率 | 该用的工具有没有用 |
+| 过程长度 | 是否过长、是否绕路 |
+| 稳定性 | 换几次输入是否都能答对 |
 
-```bash
-cd /Users/jianglin/Desktop/backend/AI-backend
-npm install
-npm run dev
-```
+### 4.1 最有价值的对比
 
-如果启动正常，你应该看到类似输出：
+你可以做一个很简单的 A/B：
 
-```bash
-🚀 Server ready at http://localhost:3000
-```
+- A：直接问模型
+- B：走 ReAct 循环
 
-> 端口以你的 `.env` / config 实际配置为准。
-
-### 5.2 调接口验证
-
-你可以直接用 curl 或 Apifox / Postman 测试：
-
-```bash
-curl -X POST http://localhost:3000/api/agent-eval   -H 'Content-Type: application/json'   -d '{
-    "input": "test 测试复杂任务（翻译、问答、推理）",
-    "debug": true
-  }'
-```
-
-### 5.3 预期返回
-
-如果最小实现成功，通常会看到这样的结构：
-
-```json
-{
-  "success": true,
-  "message": "测试复杂任务（翻译、问答、推理） 执行成功",
-  "data": {
-    "result": {
-      "ok": true,
-      "feature": "agent-eval"
-    },
-    "logs": [
-      { "stage": "thought", "content": "开始分析任务" },
-      { "stage": "action", "content": "执行 测试复杂任务（翻译、问答、推理） 的核心逻辑" },
-      { "stage": "observation", "content": "测试复杂任务（翻译、问答、推理） 的最小实现已经打通" }
-    ]
-  }
-}
-```
-
-如果你拿不到这个结果，不要急着怀疑模型，先查三件事：
-
-1. `src/routes/index.js` 有没有挂路由
-2. controller 文件名、导入名是否写对
-3. service 有没有正确 export default
+如果 B 在复杂问题上更稳定、可解释、可复现，那就说明你的 Agent 设计是有效的。
 
 ---
 
-## 六、结合你现有项目，这一节具体应该怎么练
+## 五、小结：测试复杂任务，本质是在测“系统行为”
 
-### 6.1 最推荐的练法
+复杂任务评测不是为了把答案抄成标准答案，而是为了回答：
 
-不要追求一步到位把这一节做到完美，而是按这个顺序走：
+> **这个 Agent 在面对多步任务时，是不是有稳定的解决路径？**
 
-1. **先把最小路由打通**
-2. **再补 service 真逻辑**
-3. **再加日志**
-4. **最后再考虑 validator / schema / function 定义是否下沉**
+只要你把任务、证据、指标这三件事做扎实，后面每次改 prompt、改工具、改路由，都会有可比较的基线。
 
-这是最稳的节奏。先通，再真，再好看。别反过来。
-
-### 6.2 如果你想把这节接进聊天主链路
-
-你现在项目里已经有：
-
-- `chat.routes.js`
-- `chat.controller.js`
-- `ai.service.js`
-- `functionExecutor`
-- `functions/`
-- `schemas/`
-
-所以当本节能力成熟后，可以继续考虑两种接法：
-
-#### 接法一：独立接口
-适合教学和调试，最容易定位问题。
-
-#### 接法二：接入聊天链路
-适合做真正的 Agent / function calling / tool execution。
-
-也就是说，本节先做独立接口是为了学习效率，不是因为它只能独立存在。
-
----
-
-## 七、常见坑
-
-### 7.1 容易写歪的地方
-
-1. **把所有逻辑都写进 controller**  
-   看起来快，后面改起来会很脏。
-
-2. **一上来就改 chat 主链路**  
-   这很容易把调试复杂度拉满。先独立接口，真的省命。
-
-3. **没有日志**  
-   后面做 Agent / Search / Chunk 时，你会不知道是哪一步错了。
-
-4. **没想清楚这一节能力属于哪层**  
-   结果 route、controller、service 三层职责混乱，最后谁都像打零工的。
-
-### 7.2 建议的调试顺序
-
-出了问题，按这个顺序查：
-
-1. 服务有没有启动
-2. 路由有没有注册
-3. controller 有没有被命中
-4. service 是否正常返回结构
-5. 日志里有没有异常栈
-
-这顺序很土，但很有效。别一出错就先怀疑宇宙射线。
-
----
-
-## 八、小结
-
-这一节的关键，不是“我又学了一个新名词”，而是：
-
-- 我知道怎样把 **测试复杂任务（翻译、问答、推理）** 放进一套真实后端工程
-- 我知道 route / controller / service 该怎么配合
-- 我知道怎样用最小接口把能力打通
-- 我知道怎样为后续的 Agent、MCP、Embedding、Chunking 铺路
-
-如果你能按这篇文档真的在 `AI-backend` 里敲完一次，这节才算学到了。
-
-否则就还是那种很熟悉的状态：字都认识，项目不会长。

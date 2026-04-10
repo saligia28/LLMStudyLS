@@ -1,388 +1,240 @@
-# Step 45: 实现文件写入工具
+# Step 45: MCP 实践｜实现文件写入工具
 
 ## 学习目标
 
-这一节不再写成“看起来像懂了”的纯讲义，而是直接以你已经实现过的项目 **`/Users/jianglin/Desktop/backend/AI-backend`** 为练习底座，讲清楚 **实现文件写入工具** 应该怎么落进一套真实 Node 后端工程里。
+这一节要解决的是：**怎样把“写文件”设计成一个可控、可回滚、可审计的 MCP tool**。和读取不同，写入会直接改变本地状态，所以它必须比读操作更严格。
 
-做完本节后，你应该能：
+学完这一节，你应该能：
 
-1. 说清楚这项能力该落在哪一层（route / controller / service / adapter / utils）
-2. 在 `AI-backend` 现有目录结构下继续扩展，而不是另起炉灶
-3. 按步骤新增文件、修改入口、跑接口、看日志
-4. 为后续 week 的 Agent / RAG / 工具系统打基础
+1. 设计一个适合 Agent 调用的 `write_file` schema
+2. 理解写入工具为什么要有 `dryRun`、`overwrite`、`backup` 这类开关
+3. 用原子写入和备份机制降低损坏风险
+4. 看懂“预览 -> 确认 -> 落盘 -> 校验”的安全链路
 
-> **本节目标：** 增加受控写文件工具，并记录审计日志。
-
----
-
-## 一、本节内容应该落到你项目的哪里？
-
-你现在这个项目已经不是初学 demo，而是一个分层比较清楚的后端工程：
-
-```
-AI-backend/
-├── src/
-│   ├── routes/
-│   ├── controllers/
-│   ├── services/
-│   ├── adapters/
-│   ├── middleware/
-│   ├── validators/
-│   └── utils/
-├── functions/
-├── schemas/
-└── server.js
-```
-
-所以学这一节时，不要再问“我要不要新建一个 demo 项目”。答案是不需要。你应该直接在这套工程里继续长能力。
-
-### 1.1 本节推荐落点
-
-围绕 **实现文件写入工具**，建议这样放：
-
-- **routes**：暴露测试接口
-- **controllers**：解析请求、组织调用
-- **services**：承载核心业务逻辑
-- **utils / functions / schemas**：放辅助工具、函数定义、结构约束
-- **adapters**：如果本节涉及模型提供商差异，再往这里下沉
-
-### 1.2 本节真正要学会什么
-
-不是“我知道这个名词是什么意思”，而是：
-
-- 我知道这项能力为什么属于 service 层
-- 我知道怎样给它补一个测试接口
-- 我知道如何把执行日志暴露出来，方便调试
-- 我知道下一步它如何继续接到更大的 Agent 或 RAG 链路里
+> **本节主线：** 让模型能改文件，但不能“任性改文件”。
 
 ---
 
-## 二、先设计实现方案，再动代码
+## 一、先定原则：写入工具不是简单封装 `fs.writeFile`
 
-### 2.1 本节建议新增 / 修改的文件
+### 1.1 写入工具的职责
 
-先不要一上来乱写。建议按下面的文件清单推进：
+写入工具主要做四件事：
 
-```
-src/
-├── routes/
-│   └── mcp-write-file.routes.js          # 新增：本节练习接口
-├── controllers/
-│   └── mcp-write-file.controller.js      # 新增：请求入口
-├── services/
-│   └── mcp-write-file.service.js         # 新增：核心逻辑
-├── routes/index.js               # 修改：挂载新路由
-└── app.js / server.js            # 通常无需改动，除非你要挂更多中间件
-```
+- 根据路径找到目标文件
+- 校验是否允许写入
+- 安全落盘，尽量保证原子性
+- 返回可审计的结果
 
-如果本节涉及工具定义或函数调用，还可以继续扩：
+这意味着它不仅是一个 I/O 接口，还是一条**状态变更通道**。
 
-```
-functions/
-└── mcp-write-file.js
+### 1.2 为什么要比读取更谨慎
 
-schemas/
-└── mcp-write-file.schema.js
-```
+读取失败，通常只是上下文不完整；写入失败，可能导致：
 
-### 2.2 设计原则
+- 项目文件损坏
+- 配置覆盖
+- 代码语义错误
+- 敏感信息泄漏
 
-这一节建议坚持 4 个原则：
-
-1. **核心逻辑放 service**，不要塞进 controller
-2. **controller 只做请求协调**，不做复杂业务判断
-3. **route 只负责路径和中间件**，别把逻辑写成一锅粥
-4. **先打通最小闭环，再考虑抽象与复用**
-
-这四条很朴素，但很值钱。你后面做 Agent、MCP、RAG 时，能不能不写成事故现场，基本就看它们。
+所以写入工具默认应该是“拒绝更多，放行更少”。
 
 ---
 
-## 三、代码实操：在 AI-backend 里把这节能力接进去
+## 二、输入输出设计：把风险前置到 schema
 
-### 3.1 第一步：先写 service
-
-创建文件：`src/services/mcp-write-file.service.js`
-
-```js
-import logger from '../utils/logger.js'
-
-class McpWriteFileService {
-  async run(payload = {}) {
-    const startTime = Date.now()
-    const logs = []
-
-    logs.push({ stage: 'thought', content: '开始分析任务' })
-    logs.push({ stage: 'action', content: '执行 实现文件写入工具 的核心逻辑' })
-
-    const result = {
-      ok: true,
-      feature: 'mcp-write-file',
-      payload,
-      summary: '实现文件写入工具 的最小实现已经打通',
-      completedAt: new Date().toISOString(),
-    }
-
-    logs.push({ stage: 'observation', content: result.summary })
-
-    logger.info('mcp-write-file service completed', {
-      duration: Date.now() - startTime,
-    })
-
-    return { result, logs }
-  }
-}
-
-export default new McpWriteFileService()
-```
-
-这一步的目标很简单：**先把输入、执行、结果、日志结构立起来**。
-
-你别嫌它朴素。真正值钱的是这个骨架，因为后面你只需要不断把“假动作”替换成“真逻辑”。
-
-### 3.2 第二步：补 controller
-
-创建文件：`src/controllers/mcp-write-file.controller.js`
-
-```js
-import { success } from '../utils/response.js'
-import mcpWriteFileService from '../services/mcp-write-file.service.js'
-
-class McpWriteFileController {
-  async run(req, res) {
-    const data = await mcpWriteFileService.run(req.body)
-    return res.json(success(data, '实现文件写入工具 执行成功'))
-  }
-}
-
-export default new McpWriteFileController()
-```
-
-为什么这一层要单独保留？因为后面你大概率会在这里做：
-
-- 参数校验结果接入
-- 请求上下文拼装
-- 用户身份 / 权限信息透传
-- 返回结构格式化
-
-如果你一上来全糊进 route，后面很快就会开始骂昨天的自己。
-
-### 3.3 第三步：补 route
-
-创建文件：`src/routes/mcp-write-file.routes.js`
-
-```js
-import express from 'express'
-import mcpWriteFileController from '../controllers/mcp-write-file.controller.js'
-import { asyncHandler } from '../utils/asyncHandler.js'
-
-const router = express.Router()
-
-router.post('/mcp-write-file', asyncHandler(mcpWriteFileController.run.bind(mcpWriteFileController)))
-
-export default router
-```
-
-### 3.4 第四步：挂到总路由
-
-修改文件：`src/routes/index.js`
-
-在顶部新增：
-
-```js
-import mcpwritefileRoutes from './mcp-write-file.routes.js'
-```
-
-在路由挂载区新增：
-
-```js
-router.use('/', mcpwritefileRoutes)
-```
-
-这样本节接口就会进入统一 `/api` 前缀下。
-
-最终你可以通过下面地址访问：
-
-```
-POST /api/mcp-write-file
-```
-
----
-
-## 四、这节能力该怎么“写真”
-
-上面的代码只是最小骨架。真正练手时，你应该把本节主题替换进来。
-
-### 4.1 围绕“实现文件写入工具”的真实实现方向
-
-你可以按下面方式升级当前 service：
-
-- 如果这一节偏 **Agent / ReAct / MCP**：
-  - 在 `service.run()` 中增加多阶段日志
-  - 把 thought / action / observation 结构化输出
-  - 让 controller 直接返回完整执行过程
-
-- 如果这一节偏 **Embedding / Search / Chunking**：
-  - 在 service 中增加预处理、索引、检索等步骤
-  - 返回中间结果，如 score、chunk 数量、过滤结果
-  - 方便你在接口层先把链路看清楚
-
-### 4.2 推荐你至少保留这些字段
-
-建议统一返回：
-
-```js
-{
-  result: {},
-  logs: [],
-  meta: {
-    duration: 0,
-    feature: 'mcp-write-file',
-    step: 45,
-  }
-}
-```
-
-因为后面你做复杂能力时，日志和 meta 会非常有用。没有这些字段，调试会像摸黑走楼梯，节目效果很强，工程体验很差。
-
----
-
-## 五、如何运行和验证
-
-### 5.1 启动项目
-
-进入项目目录：
-
-```bash
-cd /Users/jianglin/Desktop/backend/AI-backend
-npm install
-npm run dev
-```
-
-如果启动正常，你应该看到类似输出：
-
-```bash
-🚀 Server ready at http://localhost:3000
-```
-
-> 端口以你的 `.env` / config 实际配置为准。
-
-### 5.2 调接口验证
-
-你可以直接用 curl 或 Apifox / Postman 测试：
-
-```bash
-curl -X POST http://localhost:3000/api/mcp-write-file   -H 'Content-Type: application/json'   -d '{
-    "input": "test 实现文件写入工具",
-    "debug": true
-  }'
-```
-
-### 5.3 预期返回
-
-如果最小实现成功，通常会看到这样的结构：
+### 2.1 推荐输入 schema
 
 ```json
 {
-  "success": true,
-  "message": "实现文件写入工具 执行成功",
-  "data": {
-    "result": {
-      "ok": true,
-      "feature": "mcp-write-file"
-    },
-    "logs": [
-      { "stage": "thought", "content": "开始分析任务" },
-      { "stage": "action", "content": "执行 实现文件写入工具 的核心逻辑" },
-      { "stage": "observation", "content": "实现文件写入工具 的最小实现已经打通" }
-    ]
+  "type": "object",
+  "properties": {
+    "path": { "type": "string" },
+    "content": { "type": "string" },
+    "encoding": { "type": "string", "enum": ["utf-8"], "default": "utf-8" },
+    "overwrite": { "type": "boolean", "default": false },
+    "createDirectories": { "type": "boolean", "default": true },
+    "backup": { "type": "boolean", "default": true },
+    "dryRun": { "type": "boolean", "default": false }
+  },
+  "required": ["path", "content"]
+}
+```
+
+几个关键设计点：
+
+- `overwrite` 默认关闭，避免覆盖已有文件
+- `backup` 默认开启，方便回滚
+- `dryRun` 用来预览结果，不真正落盘
+- 只允许明确的文本编码，避免把写入工具变成二进制搬运器
+
+### 2.2 推荐输出结构
+
+```json
+{
+  "ok": true,
+  "path": "src/demo.js",
+  "absPath": "/workspace/src/demo.js",
+  "action": "written",
+  "bytesWritten": 421,
+  "backupPath": "/workspace/src/demo.js.bak",
+  "meta": {
+    "dryRun": false,
+    "overwritten": true,
+    "checksum": "..."
   }
 }
 ```
 
-如果你拿不到这个结果，不要急着怀疑模型，先查三件事：
+如果是 `dryRun`，输出应该明确告诉模型“没有真的改”：
 
-1. `src/routes/index.js` 有没有挂路由
-2. controller 文件名、导入名是否写对
-3. service 有没有正确 export default
-
----
-
-## 六、结合你现有项目，这一节具体应该怎么练
-
-### 6.1 最推荐的练法
-
-不要追求一步到位把这一节做到完美，而是按这个顺序走：
-
-1. **先把最小路由打通**
-2. **再补 service 真逻辑**
-3. **再加日志**
-4. **最后再考虑 validator / schema / function 定义是否下沉**
-
-这是最稳的节奏。先通，再真，再好看。别反过来。
-
-### 6.2 如果你想把这节接进聊天主链路
-
-你现在项目里已经有：
-
-- `chat.routes.js`
-- `chat.controller.js`
-- `ai.service.js`
-- `functionExecutor`
-- `functions/`
-- `schemas/`
-
-所以当本节能力成熟后，可以继续考虑两种接法：
-
-#### 接法一：独立接口
-适合教学和调试，最容易定位问题。
-
-#### 接法二：接入聊天链路
-适合做真正的 Agent / function calling / tool execution。
-
-也就是说，本节先做独立接口是为了学习效率，不是因为它只能独立存在。
+```json
+{
+  "ok": true,
+  "action": "preview",
+  "meta": {
+    "dryRun": true,
+    "wouldWriteBytes": 421
+  }
+}
+```
 
 ---
 
-## 七、常见坑
+## 三、代码实现：原子写入、备份和路径保护
 
-### 7.1 容易写歪的地方
+### 3.1 一个安全的最小实现
 
-1. **把所有逻辑都写进 controller**  
-   看起来快，后面改起来会很脏。
+```js
+import fs from 'node:fs/promises'
+import path from 'node:path'
+import crypto from 'node:crypto'
 
-2. **一上来就改 chat 主链路**  
-   这很容易把调试复杂度拉满。先独立接口，真的省命。
+export async function writeFileTool(input, context) {
+  const root = context.workspaceRoot
+  const absPath = path.resolve(root, input.path)
 
-3. **没有日志**  
-   后面做 Agent / Search / Chunk 时，你会不知道是哪一步错了。
+  if (!absPath.startsWith(root + path.sep)) {
+    throw new Error('Path outside workspace is not allowed')
+  }
 
-4. **没想清楚这一节能力属于哪层**  
-   结果 route、controller、service 三层职责混乱，最后谁都像打零工的。
+  if (input.dryRun) {
+    return {
+      ok: true,
+      action: 'preview',
+      path: input.path,
+      absPath,
+      meta: { dryRun: true, wouldWriteBytes: Buffer.byteLength(input.content, 'utf-8') }
+    }
+  }
 
-### 7.2 建议的调试顺序
+  const exists = await fs
+    .access(absPath)
+    .then(() => true)
+    .catch(() => false)
 
-出了问题，按这个顺序查：
+  if (exists && !input.overwrite) {
+    throw new Error('File exists and overwrite is disabled')
+  }
 
-1. 服务有没有启动
-2. 路由有没有注册
-3. controller 有没有被命中
-4. service 是否正常返回结构
-5. 日志里有没有异常栈
+  await fs.mkdir(path.dirname(absPath), { recursive: !!input.createDirectories })
 
-这顺序很土，但很有效。别一出错就先怀疑宇宙射线。
+  const tempPath = `${absPath}.tmp-${Date.now()}`
+  const backupPath = exists && input.backup ? `${absPath}.bak` : null
+
+  if (backupPath) {
+    await fs.copyFile(absPath, backupPath)
+  }
+
+  await fs.writeFile(tempPath, input.content, input.encoding ?? 'utf-8')
+  await fs.rename(tempPath, absPath)
+
+  return {
+    ok: true,
+    path: input.path,
+    absPath,
+    action: exists ? 'overwritten' : 'created',
+    bytesWritten: Buffer.byteLength(input.content, 'utf-8'),
+    backupPath,
+    meta: {
+      checksum: crypto.createHash('sha256').update(input.content).digest('hex')
+    }
+  }
+}
+```
+
+### 3.2 tool definition 里要标明副作用
+
+```js
+registry.register({
+  name: 'write_file',
+  description: 'Write text content to a workspace file safely',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      path: { type: 'string' },
+      content: { type: 'string' },
+      overwrite: { type: 'boolean' },
+      dryRun: { type: 'boolean' }
+    },
+    required: ['path', 'content']
+  },
+  meta: {
+    sideEffect: 'write',
+    permission: 'workspace-write',
+    requiresConfirmation: true
+  },
+  handler: writeFileTool
+})
+```
+
+`requiresConfirmation: true` 不是装饰字段，它是给 client 和 agent 的“别直接动手”的提示。
 
 ---
 
-## 八、小结
+## 四、调试和安全：写入工具必须有防误伤机制
 
-这一节的关键，不是“我又学了一个新名词”，而是：
+### 4.1 最重要的四个控制点
 
-- 我知道怎样把 **实现文件写入工具** 放进一套真实后端工程
-- 我知道 route / controller / service 该怎么配合
-- 我知道怎样用最小接口把能力打通
-- 我知道怎样为后续的 Agent、MCP、Embedding、Chunking 铺路
+1. **路径限制**：只允许 workspace 内写入
+2. **覆盖控制**：默认不能覆盖已有文件
+3. **备份控制**：修改前先留备份
+4. **审计控制**：记录谁写了什么、写到哪里、写了多少
 
-如果你能按这篇文档真的在 `AI-backend` 里敲完一次，这节才算学到了。
+### 4.2 推荐的安全流程
 
-否则就还是那种很熟悉的状态：字都认识，项目不会长。
+```
+Agent 提出修改意图
+      ↓
+生成 patch 或写入计划
+      ↓
+客户端预览差异
+      ↓
+用户或策略确认
+      ↓
+调用 write_file
+      ↓
+执行后校验和日志记录
+```
+
+这条链路里，**确认不是可选项，而是防止 Agent 失控的关键阀门**。
+
+### 4.3 常见故障
+
+- `overwrite` 没开，导致修改直接被拒绝
+- 目录不存在，落盘失败
+- 写入后文件格式损坏，通常是内容生成环节出了问题，不一定是 I/O 层
+- 备份路径被覆盖，说明备份命名策略不够明确
+
+---
+
+## 五、小结
+
+写入工具的教学重点不是“能写”，而是“能写但不乱写”。真正可上线的本地操作 Agent，必须把写入设计成一个受控操作：
+
+- 有明确输入边界
+- 有默认保护
+- 有备份和回滚
+- 有日志和审计
+
+下一节我们会把另一个高风险能力接进来：shell 命令执行。它比文件写入更危险，因此需要更严格的白名单和沙箱策略。

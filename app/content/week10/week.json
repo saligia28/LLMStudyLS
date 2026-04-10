@@ -1,13 +1,14 @@
 {
   "id": "week10",
   "title": "Week 10: Chunking",
-  "description": "学习文档切分策略与召回效果之间的关系，构建可实验、可复用的 chunk 工具链。",
+  "description": "从长度、重叠、语义边界到自动切分工具、metadata、召回实验与性能优化，系统掌握 Chunking 在 RAG 中的设计与落地方法。",
   "order": 10,
   "steps": [
     {
       "id": "step64",
+      "order": 64,
       "title": "研究 chunk 切分策略（长度、重叠）",
-      "description": "学习研究 chunk 切分策略（长度、重叠），理解其在Chunking中的作用与实践方式。",
+      "description": "理解固定长度、滑动窗口与语义切分的差异，并掌握长度与 overlap 如何共同影响 chunk 质量。",
       "docFile": "step64.md",
       "codeDir": "chunk-strategy",
       "canManual": false,
@@ -19,8 +20,9 @@
     },
     {
       "id": "step65",
+      "order": 65,
       "title": "对不同 chunk 长度做实验",
-      "description": "学习对不同 chunk 长度做实验，理解其在Chunking中的作用与实践方式。",
+      "description": "设计 chunk size 与 overlap 的对照实验，使用召回指标和成本指标评价不同切分方案。",
       "docFile": "step65.md",
       "codeDir": "chunk-experiment",
       "canManual": false,
@@ -32,8 +34,9 @@
     },
     {
       "id": "step66",
+      "order": 66,
       "title": "写一个自动 chunk 工具",
-      "description": "学习写一个自动 chunk 工具，理解其在Chunking中的作用与实践方式。",
+      "description": "实现一个支持 markdown 结构识别、层级合并与输出 metadata 的自动 chunk 工具。",
       "docFile": "step66.md",
       "codeDir": "auto-chunk-tool",
       "canManual": false,
@@ -45,8 +48,9 @@
     },
     {
       "id": "step67",
+      "order": 67,
       "title": "加入元数据（文档名、页码）",
-      "description": "学习加入元数据（文档名、页码），理解其在Chunking中的作用与实践方式。",
+      "description": "为 chunk 注入文档名、页码、section 和段落等 metadata，并理解其在检索与回溯中的价值。",
       "docFile": "step67.md",
       "codeDir": "chunk-metadata",
       "canManual": false,
@@ -58,8 +62,9 @@
     },
     {
       "id": "step68",
+      "order": 68,
       "title": "实验 chunk 对召回率影响",
-      "description": "学习实验 chunk 对召回率影响，理解其在Chunking中的作用与实践方式。",
+      "description": "通过实验量化不同 chunk 策略对召回率、排序与答案质量的影响。",
       "docFile": "step68.md",
       "codeDir": "recall-test",
       "canManual": false,
@@ -71,8 +76,9 @@
     },
     {
       "id": "step69",
+      "order": 69,
       "title": "优化 chunk 工具",
-      "description": "学习优化 chunk 工具，理解其在Chunking中的作用与实践方式。",
+      "description": "从去重、边界处理、性能与 rerank 前处理四个方向优化 chunk 工具。",
       "docFile": "step69.md",
       "codeDir": "chunk-optimize",
       "canManual": false,
@@ -84,8 +90,9 @@
     },
     {
       "id": "step70",
+      "order": 70,
       "title": "整理结论",
-      "description": "学习整理结论，理解其在Chunking中的作用与实践方式。",
+      "description": "总结 Chunking 的方法论，并与 Week9 的 Embedding + 向量存储串成完整 RAG 入库链路。",
       "docFile": "step70.md",
       "codeDir": "chunk-summary",
       "canManual": false,

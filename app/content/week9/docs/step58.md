@@ -1,388 +1,222 @@
-# Step 58: 用 OpenAI/DeepSeek 做 embedding
+# Step 58: Embedding + 向量存储｜用 OpenAI/DeepSeek 做 embedding
 
 ## 学习目标
 
-这一节不再写成“看起来像懂了”的纯讲义，而是直接以你已经实现过的项目 **`/Users/jianglin/Desktop/backend/AI-backend`** 为练习底座，讲清楚 **用 OpenAI/DeepSeek 做 embedding** 应该怎么落进一套真实 Node 后端工程里。
+这一节的本质问题是：**如何把一批文本稳定地转成向量，并且把输入输出组织成工程里可用的形态？**
 
-做完本节后，你应该能：
+通过本教程，你将：
 
-1. 说清楚这项能力该落在哪一层（route / controller / service / adapter / utils）
-2. 在 `AI-backend` 现有目录结构下继续扩展，而不是另起炉灶
-3. 按步骤新增文件、修改入口、跑接口、看日志
-4. 为后续 week 的 Agent / RAG / 工具系统打基础
+1. 理解 embedding API 的输入、输出和常见返回结构
+2. 学会使用 OpenAI 或 DeepSeek 这类兼容接口生成文本向量
+3. 搞清楚为什么批量调用比逐条调用更适合做索引构建
+4. 学会把结果整理成后续向量库 upsert 能直接消费的数据
+5. 为本地向量库、search 查询和 service 封装做好准备
 
-> **本节目标：** 封装 embedding provider 调用。
-
----
-
-## 一、本节内容应该落到你项目的哪里？
-
-你现在这个项目已经不是初学 demo，而是一个分层比较清楚的后端工程：
-
-```
-AI-backend/
-├── src/
-│   ├── routes/
-│   ├── controllers/
-│   ├── services/
-│   ├── adapters/
-│   ├── middleware/
-│   ├── validators/
-│   └── utils/
-├── functions/
-├── schemas/
-└── server.js
-```
-
-所以学这一节时，不要再问“我要不要新建一个 demo 项目”。答案是不需要。你应该直接在这套工程里继续长能力。
-
-### 1.1 本节推荐落点
-
-围绕 **用 OpenAI/DeepSeek 做 embedding**，建议这样放：
-
-- **routes**：暴露测试接口
-- **controllers**：解析请求、组织调用
-- **services**：承载核心业务逻辑
-- **utils / functions / schemas**：放辅助工具、函数定义、结构约束
-- **adapters**：如果本节涉及模型提供商差异，再往这里下沉
-
-### 1.2 本节真正要学会什么
-
-不是“我知道这个名词是什么意思”，而是：
-
-- 我知道这项能力为什么属于 service 层
-- 我知道怎样给它补一个测试接口
-- 我知道如何把执行日志暴露出来，方便调试
-- 我知道下一步它如何继续接到更大的 Agent 或 RAG 链路里
+> **本节目标**：把“文本向量化”真正接进工程流程，而不是停留在概念层。
 
 ---
 
-## 二、先设计实现方案，再动代码
+## 一、先看清楚：embedding API 到底做了什么
 
-### 2.1 本节建议新增 / 修改的文件
+### 1.1 输入是什么
 
-先不要一上来乱写。建议按下面的文件清单推进：
-
-```
-src/
-├── routes/
-│   └── embedding-provider.routes.js          # 新增：本节练习接口
-├── controllers/
-│   └── embedding-provider.controller.js      # 新增：请求入口
-├── services/
-│   └── embedding-provider.service.js         # 新增：核心逻辑
-├── routes/index.js               # 修改：挂载新路由
-└── app.js / server.js            # 通常无需改动，除非你要挂更多中间件
-```
-
-如果本节涉及工具定义或函数调用，还可以继续扩：
-
-```
-functions/
-└── embedding-provider.js
-
-schemas/
-└── embedding-provider.schema.js
-```
-
-### 2.2 设计原则
-
-这一节建议坚持 4 个原则：
-
-1. **核心逻辑放 service**，不要塞进 controller
-2. **controller 只做请求协调**，不做复杂业务判断
-3. **route 只负责路径和中间件**，别把逻辑写成一锅粥
-4. **先打通最小闭环，再考虑抽象与复用**
-
-这四条很朴素，但很值钱。你后面做 Agent、MCP、RAG 时，能不能不写成事故现场，基本就看它们。
-
----
-
-## 三、代码实操：在 AI-backend 里把这节能力接进去
-
-### 3.1 第一步：先写 service
-
-创建文件：`src/services/embedding-provider.service.js`
+embedding API 的输入通常很简单：字符串，或者字符串数组。
 
 ```js
-import logger from '../utils/logger.js'
-
-class EmbeddingProviderService {
-  async run(payload = {}) {
-    const startTime = Date.now()
-    const logs = []
-
-    logs.push({ stage: 'thought', content: '开始分析任务' })
-    logs.push({ stage: 'action', content: '执行 用 OpenAI/DeepSeek 做 embedding 的核心逻辑' })
-
-    const result = {
-      ok: true,
-      feature: 'embedding-provider',
-      payload,
-      summary: '用 OpenAI/DeepSeek 做 embedding 的最小实现已经打通',
-      completedAt: new Date().toISOString(),
-    }
-
-    logs.push({ stage: 'observation', content: result.summary })
-
-    logger.info('embedding-provider service completed', {
-      duration: Date.now() - startTime,
-    })
-
-    return { result, logs }
-  }
-}
-
-export default new EmbeddingProviderService()
+[
+  '如何重置密码',
+  '账号密码找回',
+  '修改登录口令'
+]
 ```
 
-这一步的目标很简单：**先把输入、执行、结果、日志结构立起来**。
+如果你的场景是建索引，输入一般来自切好的文档块；如果你的场景是在线检索，输入通常就是用户的查询文本。
 
-你别嫌它朴素。真正值钱的是这个骨架，因为后面你只需要不断把“假动作”替换成“真逻辑”。
+### 1.2 输出是什么
 
-### 3.2 第二步：补 controller
-
-创建文件：`src/controllers/embedding-provider.controller.js`
-
-```js
-import { success } from '../utils/response.js'
-import embeddingProviderService from '../services/embedding-provider.service.js'
-
-class EmbeddingProviderController {
-  async run(req, res) {
-    const data = await embeddingProviderService.run(req.body)
-    return res.json(success(data, '用 OpenAI/DeepSeek 做 embedding 执行成功'))
-  }
-}
-
-export default new EmbeddingProviderController()
-```
-
-为什么这一层要单独保留？因为后面你大概率会在这里做：
-
-- 参数校验结果接入
-- 请求上下文拼装
-- 用户身份 / 权限信息透传
-- 返回结构格式化
-
-如果你一上来全糊进 route，后面很快就会开始骂昨天的自己。
-
-### 3.3 第三步：补 route
-
-创建文件：`src/routes/embedding-provider.routes.js`
-
-```js
-import express from 'express'
-import embeddingProviderController from '../controllers/embedding-provider.controller.js'
-import { asyncHandler } from '../utils/asyncHandler.js'
-
-const router = express.Router()
-
-router.post('/embedding-provider', asyncHandler(embeddingProviderController.run.bind(embeddingProviderController)))
-
-export default router
-```
-
-### 3.4 第四步：挂到总路由
-
-修改文件：`src/routes/index.js`
-
-在顶部新增：
-
-```js
-import embeddingproviderRoutes from './embedding-provider.routes.js'
-```
-
-在路由挂载区新增：
-
-```js
-router.use('/', embeddingproviderRoutes)
-```
-
-这样本节接口就会进入统一 `/api` 前缀下。
-
-最终你可以通过下面地址访问：
-
-```
-POST /api/embedding-provider
-```
-
----
-
-## 四、这节能力该怎么“写真”
-
-上面的代码只是最小骨架。真正练手时，你应该把本节主题替换进来。
-
-### 4.1 围绕“用 OpenAI/DeepSeek 做 embedding”的真实实现方向
-
-你可以按下面方式升级当前 service：
-
-- 如果这一节偏 **Agent / ReAct / MCP**：
-  - 在 `service.run()` 中增加多阶段日志
-  - 把 thought / action / observation 结构化输出
-  - 让 controller 直接返回完整执行过程
-
-- 如果这一节偏 **Embedding / Search / Chunking**：
-  - 在 service 中增加预处理、索引、检索等步骤
-  - 返回中间结果，如 score、chunk 数量、过滤结果
-  - 方便你在接口层先把链路看清楚
-
-### 4.2 推荐你至少保留这些字段
-
-建议统一返回：
+输出的核心部分是一组向量。每个输入文本都会得到一个向量，顺序和输入顺序一一对应。
 
 ```js
 {
-  result: {},
-  logs: [],
-  meta: {
-    duration: 0,
-    feature: 'embedding-provider',
-    step: 58,
+  data: [
+    { index: 0, embedding: [0.12, -0.03, 0.87, ...] },
+    { index: 1, embedding: [0.11, -0.02, 0.85, ...] },
+    { index: 2, embedding: [0.09, -0.01, 0.83, ...] }
+  ],
+  usage: {
+    prompt_tokens: 42,
+    total_tokens: 42
   }
 }
 ```
 
-因为后面你做复杂能力时，日志和 meta 会非常有用。没有这些字段，调试会像摸黑走楼梯，节目效果很强，工程体验很差。
+你后面真正会用到的，通常不是整个响应，而是：
+
+- `data[i].embedding`
+- 输入文本和向量的一一映射
+- 可能附带的 token 统计信息
+
+### 1.3 为什么它适合做批量
+
+如果你有 100 段文本要入库，最怕的是 100 次单条请求。那样会让网络开销、限流风险和失败重试成本都变高。
+
+把多个文本一次性传进去，通常更适合：
+
+- 索引构建
+- demo 数据导入
+- 离线批处理
+- 需要保序的向量生成任务
 
 ---
 
-## 五、如何运行和验证
+## 二、OpenAI / DeepSeek 的接法
 
-### 5.1 启动项目
+### 2.1 兼容接口的核心思路
 
-进入项目目录：
+如果你的 DeepSeek 接口支持 OpenAI 兼容形式，那么代码形态通常非常接近。你只需要切换：
 
-```bash
-cd /Users/jianglin/Desktop/backend/AI-backend
-npm install
-npm run dev
-```
+- `apiKey`
+- `baseURL`
+- `model`
 
-如果启动正常，你应该看到类似输出：
+其他调用方式大体一致。
 
-```bash
-🚀 Server ready at http://localhost:3000
-```
+### 2.2 一个最小的批量 embedding 示例
 
-> 端口以你的 `.env` / config 实际配置为准。
+```js
+import OpenAI from 'openai'
 
-### 5.2 调接口验证
+const client = new OpenAI({
+  apiKey: process.env.EMBEDDING_API_KEY,
+  baseURL: process.env.EMBEDDING_BASE_URL,
+})
 
-你可以直接用 curl 或 Apifox / Postman 测试：
+export async function embedTexts(texts, model = 'text-embedding-3-small') {
+  const normalized = texts
+    .map((text) => text.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
 
-```bash
-curl -X POST http://localhost:3000/api/embedding-provider   -H 'Content-Type: application/json'   -d '{
-    "input": "test 用 OpenAI/DeepSeek 做 embedding",
-    "debug": true
-  }'
-```
-
-### 5.3 预期返回
-
-如果最小实现成功，通常会看到这样的结构：
-
-```json
-{
-  "success": true,
-  "message": "用 OpenAI/DeepSeek 做 embedding 执行成功",
-  "data": {
-    "result": {
-      "ok": true,
-      "feature": "embedding-provider"
-    },
-    "logs": [
-      { "stage": "thought", "content": "开始分析任务" },
-      { "stage": "action", "content": "执行 用 OpenAI/DeepSeek 做 embedding 的核心逻辑" },
-      { "stage": "observation", "content": "用 OpenAI/DeepSeek 做 embedding 的最小实现已经打通" }
-    ]
+  if (normalized.length === 0) {
+    return []
   }
+
+  const response = await client.embeddings.create({
+    model,
+    input: normalized,
+  })
+
+  return response.data.map((item, index) => ({
+    text: normalized[index],
+    vector: item.embedding,
+    index: item.index,
+  }))
 }
 ```
 
-如果你拿不到这个结果，不要急着怀疑模型，先查三件事：
+这段代码背后的设计重点有三个：
 
-1. `src/routes/index.js` 有没有挂路由
-2. controller 文件名、导入名是否写对
-3. service 有没有正确 export default
+1. 先做输入归一化，减少无意义差异
+2. 批量传入，减少请求次数
+3. 返回时把原文和向量重新绑定，方便后面写库
 
----
+### 2.3 DeepSeek 也能这么用吗
 
-## 六、结合你现有项目，这一节具体应该怎么练
+如果你的 DeepSeek 提供的是 OpenAI 兼容接口，通常可以直接复用上面的写法，只要把配置换成对应服务即可。
 
-### 6.1 最推荐的练法
+你可以把它理解成：
 
-不要追求一步到位把这一节做到完美，而是按这个顺序走：
+- **同一套 SDK**
+- **不同的服务地址**
+- **不同的模型名称**
 
-1. **先把最小路由打通**
-2. **再补 service 真逻辑**
-3. **再加日志**
-4. **最后再考虑 validator / schema / function 定义是否下沉**
-
-这是最稳的节奏。先通，再真，再好看。别反过来。
-
-### 6.2 如果你想把这节接进聊天主链路
-
-你现在项目里已经有：
-
-- `chat.routes.js`
-- `chat.controller.js`
-- `ai.service.js`
-- `functionExecutor`
-- `functions/`
-- `schemas/`
-
-所以当本节能力成熟后，可以继续考虑两种接法：
-
-#### 接法一：独立接口
-适合教学和调试，最容易定位问题。
-
-#### 接法二：接入聊天链路
-适合做真正的 Agent / function calling / tool execution。
-
-也就是说，本节先做独立接口是为了学习效率，不是因为它只能独立存在。
+这样做的好处是，后面你切 provider 时不用重写整条向量化链路。
 
 ---
 
-## 七、常见坑
+## 三、批量调用的关键细节
 
-### 7.1 容易写歪的地方
+### 3.1 不要把超长内容直接丢给模型
 
-1. **把所有逻辑都写进 controller**  
-   看起来快，后面改起来会很脏。
+embedding 并不等于“整篇文档一把梭”。如果文本太长，常见问题有：
 
-2. **一上来就改 chat 主链路**  
-   这很容易把调试复杂度拉满。先独立接口，真的省命。
+- 输入超过模型限制
+- 语义被稀释
+- 一次向量覆盖多个主题，检索效果变差
 
-3. **没有日志**  
-   后面做 Agent / Search / Chunk 时，你会不知道是哪一步错了。
+所以在真正做索引时，通常会先切分，再 embedding。切分策略我们会在 Step 63 详细讲。
 
-4. **没想清楚这一节能力属于哪层**  
-   结果 route、controller、service 三层职责混乱，最后谁都像打零工的。
+### 3.2 批量大小不是越大越好
 
-### 7.2 建议的调试顺序
+你需要平衡三件事：
 
-出了问题，按这个顺序查：
+- 请求效率
+- 单次失败的影响范围
+- 服务端限流和超时
 
-1. 服务有没有启动
-2. 路由有没有注册
-3. controller 有没有被命中
-4. service 是否正常返回结构
-5. 日志里有没有异常栈
+一个合理的做法是：
 
-这顺序很土，但很有效。别一出错就先怀疑宇宙射线。
+1. 先按文本长度预处理
+2. 再按批次大小提交
+3. 出错时只重试失败批次
+
+### 3.3 保持顺序映射
+
+批量调用后，向量和原文本必须一一对应。最稳妥的做法是同时维护一个结构化数组：
+
+```js
+const inputs = [
+  { id: 'doc-1', text: '如何重置密码' },
+  { id: 'doc-2', text: '账号密码找回' },
+]
+
+const vectors = await embedTexts(inputs.map((item) => item.text))
+
+const records = inputs.map((item, index) => ({
+  id: item.id,
+  text: item.text,
+  vector: vectors[index].vector,
+}))
+```
+
+这样后面进入 upsert 时，你不用再猜“这个向量到底对应哪段文本”。
 
 ---
 
-## 八、小结
+## 四、一个更接近真实工程的封装方式
 
-这一节的关键，不是“我又学了一个新名词”，而是：
+如果你希望这一步能直接支撑向量库写入，建议把返回值整理成统一结构：
 
-- 我知道怎样把 **用 OpenAI/DeepSeek 做 embedding** 放进一套真实后端工程
-- 我知道 route / controller / service 该怎么配合
-- 我知道怎样用最小接口把能力打通
-- 我知道怎样为后续的 Agent、MCP、Embedding、Chunking 铺路
+```js
+export async function embedDocuments(documents, options = {}) {
+  const texts = documents.map((doc) => doc.text)
+  const embedded = await embedTexts(texts, options.model)
 
-如果你能按这篇文档真的在 `AI-backend` 里敲完一次，这节才算学到了。
+  return documents.map((doc, index) => ({
+    id: doc.id,
+    text: doc.text,
+    vector: embedded[index].vector,
+    metadata: doc.metadata ?? {},
+  }))
+}
+```
 
-否则就还是那种很熟悉的状态：字都认识，项目不会长。
+这里的关键不是“有没有高级抽象”，而是下面这几个约定是否稳定：
+
+- 输入始终是文档对象数组
+- 输出始终包含 `id / text / vector / metadata`
+- 业务层不直接碰 SDK 的原始返回
+- 后续存储和检索都沿用同样的数据形状
+
+这种统一形状，会让你后面做向量库写入和 search 查询时轻松很多。
+
+---
+
+## 五、总结
+
+这一节你要真正带走的，是 embedding API 的三件事：
+
+1. 它把文本转成向量，向量才是后续检索的基础
+2. 批量调用比单条调用更适合索引构建
+3. 结果一定要整理成“可写入、可查询、可追踪”的结构
+
+下一步，我们就把这些向量写进本地向量库，看看 `upsert` 到底应该怎么设计。

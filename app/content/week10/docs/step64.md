@@ -1,388 +1,238 @@
-# Step 64: 研究 chunk 切分策略（长度、重叠）
+# Step 64: Chunking｜研究 chunk 切分策略（长度、重叠）
 
 ## 学习目标
 
-这一节不再写成“看起来像懂了”的纯讲义，而是直接以你已经实现过的项目 **`/Users/jianglin/Desktop/backend/AI-backend`** 为练习底座，讲清楚 **研究 chunk 切分策略（长度、重叠）** 应该怎么落进一套真实 Node 后端工程里。
+这一节要解决的不是“chunk 是什么”，而是更重要的：**为什么同一份文档，不同切法会直接改变 RAG 的检索效果？**
 
-做完本节后，你应该能：
+完成后你应该能：
 
-1. 说清楚这项能力该落在哪一层（route / controller / service / adapter / utils）
-2. 在 `AI-backend` 现有目录结构下继续扩展，而不是另起炉灶
-3. 按步骤新增文件、修改入口、跑接口、看日志
-4. 为后续 week 的 Agent / RAG / 工具系统打基础
+1. 说明 chunking 在 RAG 流程中的位置
+2. 区分固定长度、滑动窗口和语义切分
+3. 解释长度和 overlap 如何影响边界、噪声与召回
+4. 用 Node.js 写出一个最小可用的切分函数
 
-> **本节目标：** 为 RAG 预处理设计 chunk service。
-
----
-
-## 一、本节内容应该落到你项目的哪里？
-
-你现在这个项目已经不是初学 demo，而是一个分层比较清楚的后端工程：
-
-```
-AI-backend/
-├── src/
-│   ├── routes/
-│   ├── controllers/
-│   ├── services/
-│   ├── adapters/
-│   ├── middleware/
-│   ├── validators/
-│   └── utils/
-├── functions/
-├── schemas/
-└── server.js
-```
-
-所以学这一节时，不要再问“我要不要新建一个 demo 项目”。答案是不需要。你应该直接在这套工程里继续长能力。
-
-### 1.1 本节推荐落点
-
-围绕 **研究 chunk 切分策略（长度、重叠）**，建议这样放：
-
-- **routes**：暴露测试接口
-- **controllers**：解析请求、组织调用
-- **services**：承载核心业务逻辑
-- **utils / functions / schemas**：放辅助工具、函数定义、结构约束
-- **adapters**：如果本节涉及模型提供商差异，再往这里下沉
-
-### 1.2 本节真正要学会什么
-
-不是“我知道这个名词是什么意思”，而是：
-
-- 我知道这项能力为什么属于 service 层
-- 我知道怎样给它补一个测试接口
-- 我知道如何把执行日志暴露出来，方便调试
-- 我知道下一步它如何继续接到更大的 Agent 或 RAG 链路里
+> Week 9 你已经把文本送进 embedding 和向量存储了，这一节开始处理“进入 embedding 之前，文本应该长什么样”。
 
 ---
 
-## 二、先设计实现方案，再动代码
+## 一、Chunking 在 RAG 里的位置
 
-### 2.1 本节建议新增 / 修改的文件
+先把流程看清楚：
 
-先不要一上来乱写。建议按下面的文件清单推进：
-
-```
-src/
-├── routes/
-│   └── chunking.routes.js          # 新增：本节练习接口
-├── controllers/
-│   └── chunking.controller.js      # 新增：请求入口
-├── services/
-│   └── chunking.service.js         # 新增：核心逻辑
-├── routes/index.js               # 修改：挂载新路由
-└── app.js / server.js            # 通常无需改动，除非你要挂更多中间件
-```
-
-如果本节涉及工具定义或函数调用，还可以继续扩：
-
-```
-functions/
-└── chunking.js
-
-schemas/
-└── chunking.schema.js
+```text
+原始文档
+  ↓
+清洗 / 解析
+  ↓
+Chunking
+  ↓
+Embedding
+  ↓
+向量存储
+  ↓
+召回 / rerank
+  ↓
+LLM 回答
 ```
 
-### 2.2 设计原则
+Chunking 是整条链路的入口。入口如果切得太粗，后面会被噪声淹没；入口如果切得太碎，后面又会丢掉语义连续性。
 
-这一节建议坚持 4 个原则：
+### 为什么一定要切
 
-1. **核心逻辑放 service**，不要塞进 controller
-2. **controller 只做请求协调**，不做复杂业务判断
-3. **route 只负责路径和中间件**，别把逻辑写成一锅粥
-4. **先打通最小闭环，再考虑抽象与复用**
+1. embedding 和 LLM 都有上下文上限。
+2. 检索更喜欢“局部完整”的语义块。
+3. 召回结果要尽量少噪声、多命中。
+4. chunk 的粒度会直接影响索引、检索和生成成本。
 
-这四条很朴素，但很值钱。你后面做 Agent、MCP、RAG 时，能不能不写成事故现场，基本就看它们。
+### 一个直觉图
+
+```text
+太大:
+[安装流程 + FAQ + API + 错误码]
+  ↑ 一个 chunk 装太多主题，向量被“稀释”
+
+太小:
+[“返回值是”] [“一个 Promise”]
+  ↑ 语义被切碎，答案不完整
+
+刚刚好:
+[“返回值是一个 Promise 对象，失败时抛出业务错误”]
+  ↑ 局部主题完整，检索更稳
+```
 
 ---
 
-## 三、代码实操：在 AI-backend 里把这节能力接进去
+## 二、三种主流切分策略
 
-### 3.1 第一步：先写 service
+### 2.1 固定长度切分
 
-创建文件：`src/services/chunking.service.js`
+固定长度切分最简单：按字符数或 token 数直接切。
 
 ```js
-import logger from '../utils/logger.js'
-
-class ChunkingService {
-  async run(payload = {}) {
-    const startTime = Date.now()
-    const logs = []
-
-    logs.push({ stage: 'thought', content: '开始分析任务' })
-    logs.push({ stage: 'action', content: '执行 研究 chunk 切分策略（长度、重叠） 的核心逻辑' })
-
-    const result = {
-      ok: true,
-      feature: 'chunking',
-      payload,
-      summary: '研究 chunk 切分策略（长度、重叠） 的最小实现已经打通',
-      completedAt: new Date().toISOString(),
-    }
-
-    logs.push({ stage: 'observation', content: result.summary })
-
-    logger.info('chunking service completed', {
-      duration: Date.now() - startTime,
-    })
-
-    return { result, logs }
+function fixedSizeChunk(text, chunkSize = 800) {
+  const chunks = []
+  for (let i = 0; i < text.length; i += chunkSize) {
+    const part = text.slice(i, i + chunkSize)
+    if (part) chunks.push(part)
   }
-}
-
-export default new ChunkingService()
-```
-
-这一步的目标很简单：**先把输入、执行、结果、日志结构立起来**。
-
-你别嫌它朴素。真正值钱的是这个骨架，因为后面你只需要不断把“假动作”替换成“真逻辑”。
-
-### 3.2 第二步：补 controller
-
-创建文件：`src/controllers/chunking.controller.js`
-
-```js
-import { success } from '../utils/response.js'
-import chunkingService from '../services/chunking.service.js'
-
-class ChunkingController {
-  async run(req, res) {
-    const data = await chunkingService.run(req.body)
-    return res.json(success(data, '研究 chunk 切分策略（长度、重叠） 执行成功'))
-  }
-}
-
-export default new ChunkingController()
-```
-
-为什么这一层要单独保留？因为后面你大概率会在这里做：
-
-- 参数校验结果接入
-- 请求上下文拼装
-- 用户身份 / 权限信息透传
-- 返回结构格式化
-
-如果你一上来全糊进 route，后面很快就会开始骂昨天的自己。
-
-### 3.3 第三步：补 route
-
-创建文件：`src/routes/chunking.routes.js`
-
-```js
-import express from 'express'
-import chunkingController from '../controllers/chunking.controller.js'
-import { asyncHandler } from '../utils/asyncHandler.js'
-
-const router = express.Router()
-
-router.post('/chunking', asyncHandler(chunkingController.run.bind(chunkingController)))
-
-export default router
-```
-
-### 3.4 第四步：挂到总路由
-
-修改文件：`src/routes/index.js`
-
-在顶部新增：
-
-```js
-import chunkingRoutes from './chunking.routes.js'
-```
-
-在路由挂载区新增：
-
-```js
-router.use('/', chunkingRoutes)
-```
-
-这样本节接口就会进入统一 `/api` 前缀下。
-
-最终你可以通过下面地址访问：
-
-```
-POST /api/chunking
-```
-
----
-
-## 四、这节能力该怎么“写真”
-
-上面的代码只是最小骨架。真正练手时，你应该把本节主题替换进来。
-
-### 4.1 围绕“研究 chunk 切分策略（长度、重叠）”的真实实现方向
-
-你可以按下面方式升级当前 service：
-
-- 如果这一节偏 **Agent / ReAct / MCP**：
-  - 在 `service.run()` 中增加多阶段日志
-  - 把 thought / action / observation 结构化输出
-  - 让 controller 直接返回完整执行过程
-
-- 如果这一节偏 **Embedding / Search / Chunking**：
-  - 在 service 中增加预处理、索引、检索等步骤
-  - 返回中间结果，如 score、chunk 数量、过滤结果
-  - 方便你在接口层先把链路看清楚
-
-### 4.2 推荐你至少保留这些字段
-
-建议统一返回：
-
-```js
-{
-  result: {},
-  logs: [],
-  meta: {
-    duration: 0,
-    feature: 'chunking',
-    step: 64,
-  }
+  return chunks
 }
 ```
 
-因为后面你做复杂能力时，日志和 meta 会非常有用。没有这些字段，调试会像摸黑走楼梯，节目效果很强，工程体验很差。
+优点是简单、快、可预测。缺点也很明显：**它不懂语义边界**，容易把一句话、一个表格或一段代码从中间切开。
 
----
+### 2.2 滑动窗口切分
 
-## 五、如何运行和验证
+滑动窗口是在固定长度基础上加 overlap，让相邻 chunk 共享一段内容。
 
-### 5.1 启动项目
+```text
+chunkSize = 800
+overlap   = 160
+step      = 640
 
-进入项目目录：
-
-```bash
-cd /Users/jianglin/Desktop/backend/AI-backend
-npm install
-npm run dev
+Chunk 1: [0................799]
+Chunk 2:       [640................1439]
+Chunk 3:              [1280...............]
 ```
 
-如果启动正常，你应该看到类似输出：
+```js
+function slidingWindowChunk(text, chunkSize = 800, overlap = 160) {
+  if (overlap >= chunkSize) throw new Error('overlap 必须小于 chunkSize')
 
-```bash
-🚀 Server ready at http://localhost:3000
-```
+  const step = chunkSize - overlap
+  const chunks = []
 
-> 端口以你的 `.env` / config 实际配置为准。
-
-### 5.2 调接口验证
-
-你可以直接用 curl 或 Apifox / Postman 测试：
-
-```bash
-curl -X POST http://localhost:3000/api/chunking   -H 'Content-Type: application/json'   -d '{
-    "input": "test 研究 chunk 切分策略（长度、重叠）",
-    "debug": true
-  }'
-```
-
-### 5.3 预期返回
-
-如果最小实现成功，通常会看到这样的结构：
-
-```json
-{
-  "success": true,
-  "message": "研究 chunk 切分策略（长度、重叠） 执行成功",
-  "data": {
-    "result": {
-      "ok": true,
-      "feature": "chunking"
-    },
-    "logs": [
-      { "stage": "thought", "content": "开始分析任务" },
-      { "stage": "action", "content": "执行 研究 chunk 切分策略（长度、重叠） 的核心逻辑" },
-      { "stage": "observation", "content": "研究 chunk 切分策略（长度、重叠） 的最小实现已经打通" }
-    ]
+  for (let i = 0; i < text.length; i += step) {
+    const chunk = text.slice(i, i + chunkSize)
+    if (chunk) chunks.push(chunk)
+    if (i + chunkSize >= text.length) break
   }
+
+  return chunks
 }
 ```
 
-如果你拿不到这个结果，不要急着怀疑模型，先查三件事：
+Overlap 的作用是给边界信息加保险。很多答案刚好落在边界附近，不加 overlap 时很容易只拿到半句。
 
-1. `src/routes/index.js` 有没有挂路由
-2. controller 文件名、导入名是否写对
-3. service 有没有正确 export default
+### 2.3 语义切分
 
----
+语义切分不是“按长度硬切”，而是先识别文档结构，再按结构合并。
 
-## 六、结合你现有项目，这一节具体应该怎么练
+适合优先利用的边界有：
 
-### 6.1 最推荐的练法
+- Markdown 标题
+- 段落空行
+- 列表项
+- 代码块
+- 表格
 
-不要追求一步到位把这一节做到完美，而是按这个顺序走：
+```js
+function splitBySemanticBlocks(markdown) {
+  return markdown
+    .split(/\n(?=#{1,6}\s)|\n{2,}/)
+    .map(block => block.trim())
+    .filter(Boolean)
+}
+```
 
-1. **先把最小路由打通**
-2. **再补 service 真逻辑**
-3. **再加日志**
-4. **最后再考虑 validator / schema / function 定义是否下沉**
-
-这是最稳的节奏。先通，再真，再好看。别反过来。
-
-### 6.2 如果你想把这节接进聊天主链路
-
-你现在项目里已经有：
-
-- `chat.routes.js`
-- `chat.controller.js`
-- `ai.service.js`
-- `functionExecutor`
-- `functions/`
-- `schemas/`
-
-所以当本节能力成熟后，可以继续考虑两种接法：
-
-#### 接法一：独立接口
-适合教学和调试，最容易定位问题。
-
-#### 接法二：接入聊天链路
-适合做真正的 Agent / function calling / tool execution。
-
-也就是说，本节先做独立接口是为了学习效率，不是因为它只能独立存在。
+真实工程里，通常不是三选一，而是“语义切分 + 长度约束 + overlap”组合起来用。
 
 ---
 
-## 七、常见坑
+## 三、长度与 overlap 怎么定
 
-### 7.1 容易写歪的地方
+### 3.1 先看 token，不要只看字符
 
-1. **把所有逻辑都写进 controller**  
-   看起来快，后面改起来会很脏。
+字符数只是粗略估算，真正进入 embedding 的是 token。对于中文、代码、混合文本，字符和 token 的比例会波动。
 
-2. **一上来就改 chat 主链路**  
-   这很容易把调试复杂度拉满。先独立接口，真的省命。
+```js
+function estimateTokens(text) {
+  const cleaned = text.replace(/\s+/g, ' ').trim()
+  return Math.ceil(cleaned.length / 4) // 粗略估算，用来做预判
+}
+```
 
-3. **没有日志**  
-   后面做 Agent / Search / Chunk 时，你会不知道是哪一步错了。
+### 3.2 一个经验判断
 
-4. **没想清楚这一节能力属于哪层**  
-   结果 route、controller、service 三层职责混乱，最后谁都像打零工的。
+```text
+chunkSize 选“能表达完整局部主题”的最小值
+overlap   选“足以覆盖边界语义”的最小值
+```
 
-### 7.2 建议的调试顺序
+### 3.3 过大和过小的代价
 
-出了问题，按这个顺序查：
-
-1. 服务有没有启动
-2. 路由有没有注册
-3. controller 有没有被命中
-4. service 是否正常返回结构
-5. 日志里有没有异常栈
-
-这顺序很土，但很有效。别一出错就先怀疑宇宙射线。
+| 情况 | 风险 |
+| --- | --- |
+| chunk 太小 | 语义破碎，答案不完整，召回块数变多 |
+| chunk 太大 | 主题混杂，向量被稀释，噪声变高 |
+| overlap 太小 | 边界信息丢失 |
+| overlap 太大 | 重复召回、存储增加、rerank 变重 |
 
 ---
 
-## 八、小结
+## 四、如何判断切得对不对
 
-这一节的关键，不是“我又学了一个新名词”，而是：
+不要只看“能不能切出来”，要看切出来的 chunk 是否真的适合检索。
 
-- 我知道怎样把 **研究 chunk 切分策略（长度、重叠）** 放进一套真实后端工程
-- 我知道 route / controller / service 该怎么配合
-- 我知道怎样用最小接口把能力打通
-- 我知道怎样为后续的 Agent、MCP、Embedding、Chunking 铺路
+### 检查清单
 
-如果你能按这篇文档真的在 `AI-backend` 里敲完一次，这节才算学到了。
+1. 一个 chunk 是否尽量只讲一个主题
+2. 标题是否和正文一起保留
+3. 表格和代码块是否完整
+4. 边界处的信息是否被 overlap 覆盖
+5. chunk 数量是否过多，导致成本和噪声上升
 
-否则就还是那种很熟悉的状态：字都认识，项目不会长。
+### 一个最小验证脚本
+
+```js
+const text = '这是一段很长的文本，用来测试滑动窗口切分的效果。'.repeat(50)
+const chunks = slidingWindowChunk(text, 500, 100)
+
+console.log(`原始文本长度: ${text.length}`)
+console.log(`chunk 数量: ${chunks.length}`)
+console.log(`前两个 chunk 的重叠区是否一致: ${
+  chunks.length >= 2
+    ? chunks[0].slice(-100) === chunks[1].slice(0, 100)
+    : 'N/A'
+}`)
+```
+
+### 为什么要人工扫一眼
+
+因为很多问题不是参数错了，而是文档结构没被尊重。比如：
+
+- 标题单独挂着
+- 代码块被截断
+- 表格中间断行
+- 列表项被切到两块里
+
+这些问题不会在第一眼的数量统计里暴露出来，但会在召回和回答里放大。
+
+---
+
+## 五、最小练习
+
+拿一篇 Markdown 文档，分别试三种方式：
+
+1. 固定长度切分
+2. 固定长度 + overlap
+3. 标题感知 + 段落合并
+
+然后观察：
+
+- chunk 数量变化
+- 每个 chunk 的 token 估算
+- 标题与段落是否被截断
+- 哪种策略最适合你的文档类型
+
+---
+
+## 六、小结
+
+Chunking 不是一个机械预处理步骤，而是对文档语义的重新组织。
+
+记住这三句话就够了：
+
+1. 长度决定上下文密度。
+2. overlap 决定边界保险。
+3. 语义切分决定 chunk 是否像“一个可检索的局部主题”。

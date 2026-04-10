@@ -1,388 +1,246 @@
-# Step 43: 理解 MCP（Model Context Protocol）模式
+# Step 43: MCP 实践｜理解 MCP（Model Context Protocol）模式
 
 ## 学习目标
 
-这一节不再写成“看起来像懂了”的纯讲义，而是直接以你已经实现过的项目 **`/Users/jianglin/Desktop/backend/AI-backend`** 为练习底座，讲清楚 **理解 MCP（Model Context Protocol）模式** 应该怎么落进一套真实 Node 后端工程里。
+这一节的目标不是“知道 MCP 是什么名字”，而是把它放进一条真实可执行的链路里理解：**模型如何发现工具、如何调用工具、工具返回什么、server/client 的边界在哪里，以及为什么 MCP 比单纯的 function calling 更适合做本地操作 Agent**。
 
-做完本节后，你应该能：
+学完这一节，你应该能：
 
-1. 说清楚这项能力该落在哪一层（route / controller / service / adapter / utils）
-2. 在 `AI-backend` 现有目录结构下继续扩展，而不是另起炉灶
-3. 按步骤新增文件、修改入口、跑接口、看日志
-4. 为后续 week 的 Agent / RAG / 工具系统打基础
+1. 说清楚 MCP 与 function calling 的关系和差异
+2. 看懂 MCP 的核心消息流：`initialize`、`tools/list`、`tools/call`、`resources/read`
+3. 理解 tool schema、registry、invoke、resource 这几个关键概念
+4. 在本地工程里设计一套可控的 MCP 工具层
 
-> **本节目标：** 在 AI-backend 内部先模拟一个 MCP 风格工具注册与调用层。
-
----
-
-## 一、本节内容应该落到你项目的哪里？
-
-你现在这个项目已经不是初学 demo，而是一个分层比较清楚的后端工程：
-
-```
-AI-backend/
-├── src/
-│   ├── routes/
-│   ├── controllers/
-│   ├── services/
-│   ├── adapters/
-│   ├── middleware/
-│   ├── validators/
-│   └── utils/
-├── functions/
-├── schemas/
-└── server.js
-```
-
-所以学这一节时，不要再问“我要不要新建一个 demo 项目”。答案是不需要。你应该直接在这套工程里继续长能力。
-
-### 1.1 本节推荐落点
-
-围绕 **理解 MCP（Model Context Protocol）模式**，建议这样放：
-
-- **routes**：暴露测试接口
-- **controllers**：解析请求、组织调用
-- **services**：承载核心业务逻辑
-- **utils / functions / schemas**：放辅助工具、函数定义、结构约束
-- **adapters**：如果本节涉及模型提供商差异，再往这里下沉
-
-### 1.2 本节真正要学会什么
-
-不是“我知道这个名词是什么意思”，而是：
-
-- 我知道这项能力为什么属于 service 层
-- 我知道怎样给它补一个测试接口
-- 我知道如何把执行日志暴露出来，方便调试
-- 我知道下一步它如何继续接到更大的 Agent 或 RAG 链路里
+> **本节主线：** 从“模型会调用函数”升级到“模型通过协议发现并安全使用工具”。
 
 ---
 
-## 二、先设计实现方案，再动代码
+## 一、先把概念说准：MCP 解决的到底是什么问题
 
-### 2.1 本节建议新增 / 修改的文件
+### 1.1 function calling 和 MCP 不是一回事
 
-先不要一上来乱写。建议按下面的文件清单推进：
+function calling 解决的是“模型能不能输出一个结构化函数调用”。
+
+MCP 解决的是“工具系统如何被标准化地发现、描述、调用和约束”。
+
+| 维度 | Function Calling | MCP |
+|---|---|---|
+| 核心目标 | 让模型输出函数调用 | 让模型通过标准协议接入工具和资源 |
+| 工具发现 | 开发者手动把函数数组喂给模型 | client 向 server 拉取 `tools/list` |
+| 协议层 | API 功能 | 标准消息协议 |
+| 能力范围 | 主要是函数调用 | tool、resource、prompt 等能力统一管理 |
+| 适合场景 | 单应用内的函数路由 | 可插拔工具、跨进程、跨服务、跨应用 |
+
+你可以把 function calling 理解成“模型会说我要调用哪个函数”，把 MCP 理解成“模型和工具世界之间有一套可协商、可发现、可审计的协议层”。
+
+### 1.2 MCP 的三种对象
+
+MCP 里最重要的是三类对象：
 
 ```
-src/
-├── routes/
-│   └── mcp-intro.routes.js          # 新增：本节练习接口
-├── controllers/
-│   └── mcp-intro.controller.js      # 新增：请求入口
-├── services/
-│   └── mcp-intro.service.js         # 新增：核心逻辑
-├── routes/index.js               # 修改：挂载新路由
-└── app.js / server.js            # 通常无需改动，除非你要挂更多中间件
+模型/客户端  <----协议---->  MCP Server
+     │                          │
+     │                          ├─ tools: 可执行动作
+     │                          ├─ resources: 可读取上下文
+     │                          └─ prompts: 可复用提示模板
 ```
 
-如果本节涉及工具定义或函数调用，还可以继续扩：
+- `tool` 是“能做事”的，例如读文件、写文件、跑 shell。
+- `resource` 是“能读内容”的，例如一个文档、一个配置、一个页面。
+- `prompt` 是“能复用的提示模板”，用于把任务意图标准化。
 
-```
-functions/
-└── mcp-intro.js
-
-schemas/
-└── mcp-intro.schema.js
-```
-
-### 2.2 设计原则
-
-这一节建议坚持 4 个原则：
-
-1. **核心逻辑放 service**，不要塞进 controller
-2. **controller 只做请求协调**，不做复杂业务判断
-3. **route 只负责路径和中间件**，别把逻辑写成一锅粥
-4. **先打通最小闭环，再考虑抽象与复用**
-
-这四条很朴素，但很值钱。你后面做 Agent、MCP、RAG 时，能不能不写成事故现场，基本就看它们。
+本周我们重点做 `tool` 和 `resource`，因为本地操作 Agent 最常见的能力就是：读 -> 想 -> 改 -> 验证。
 
 ---
 
-## 三、代码实操：在 AI-backend 里把这节能力接进去
+## 二、协议层：MCP 的消息流和数据结构
 
-### 3.1 第一步：先写 service
+### 2.1 一次完整握手长什么样
 
-创建文件：`src/services/mcp-intro.service.js`
+MCP 通常以 JSON-RPC 风格通信。你可以先把它看成下面这条链路：
 
-```js
-import logger from '../utils/logger.js'
+1. client 连接 server
+2. 双方初始化能力
+3. client 获取工具列表
+4. model 选择工具
+5. client 发起工具调用
+6. server 返回结构化结果
 
-class McpIntroService {
-  async run(payload = {}) {
-    const startTime = Date.now()
-    const logs = []
-
-    logs.push({ stage: 'thought', content: '开始分析任务' })
-    logs.push({ stage: 'action', content: '执行 理解 MCP（Model Context Protocol）模式 的核心逻辑' })
-
-    const result = {
-      ok: true,
-      feature: 'mcp-intro',
-      payload,
-      summary: '理解 MCP（Model Context Protocol）模式 的最小实现已经打通',
-      completedAt: new Date().toISOString(),
-    }
-
-    logs.push({ stage: 'observation', content: result.summary })
-
-    logger.info('mcp-intro service completed', {
-      duration: Date.now() - startTime,
-    })
-
-    return { result, logs }
-  }
-}
-
-export default new McpIntroService()
-```
-
-这一步的目标很简单：**先把输入、执行、结果、日志结构立起来**。
-
-你别嫌它朴素。真正值钱的是这个骨架，因为后面你只需要不断把“假动作”替换成“真逻辑”。
-
-### 3.2 第二步：补 controller
-
-创建文件：`src/controllers/mcp-intro.controller.js`
-
-```js
-import { success } from '../utils/response.js'
-import mcpIntroService from '../services/mcp-intro.service.js'
-
-class McpIntroController {
-  async run(req, res) {
-    const data = await mcpIntroService.run(req.body)
-    return res.json(success(data, '理解 MCP（Model Context Protocol）模式 执行成功'))
-  }
-}
-
-export default new McpIntroController()
-```
-
-为什么这一层要单独保留？因为后面你大概率会在这里做：
-
-- 参数校验结果接入
-- 请求上下文拼装
-- 用户身份 / 权限信息透传
-- 返回结构格式化
-
-如果你一上来全糊进 route，后面很快就会开始骂昨天的自己。
-
-### 3.3 第三步：补 route
-
-创建文件：`src/routes/mcp-intro.routes.js`
-
-```js
-import express from 'express'
-import mcpIntroController from '../controllers/mcp-intro.controller.js'
-import { asyncHandler } from '../utils/asyncHandler.js'
-
-const router = express.Router()
-
-router.post('/mcp-intro', asyncHandler(mcpIntroController.run.bind(mcpIntroController)))
-
-export default router
-```
-
-### 3.4 第四步：挂到总路由
-
-修改文件：`src/routes/index.js`
-
-在顶部新增：
-
-```js
-import mcpintroRoutes from './mcp-intro.routes.js'
-```
-
-在路由挂载区新增：
-
-```js
-router.use('/', mcpintroRoutes)
-```
-
-这样本节接口就会进入统一 `/api` 前缀下。
-
-最终你可以通过下面地址访问：
-
-```
-POST /api/mcp-intro
-```
-
----
-
-## 四、这节能力该怎么“写真”
-
-上面的代码只是最小骨架。真正练手时，你应该把本节主题替换进来。
-
-### 4.1 围绕“理解 MCP（Model Context Protocol）模式”的真实实现方向
-
-你可以按下面方式升级当前 service：
-
-- 如果这一节偏 **Agent / ReAct / MCP**：
-  - 在 `service.run()` 中增加多阶段日志
-  - 把 thought / action / observation 结构化输出
-  - 让 controller 直接返回完整执行过程
-
-- 如果这一节偏 **Embedding / Search / Chunking**：
-  - 在 service 中增加预处理、索引、检索等步骤
-  - 返回中间结果，如 score、chunk 数量、过滤结果
-  - 方便你在接口层先把链路看清楚
-
-### 4.2 推荐你至少保留这些字段
-
-建议统一返回：
-
-```js
-{
-  result: {},
-  logs: [],
-  meta: {
-    duration: 0,
-    feature: 'mcp-intro',
-    step: 43,
-  }
-}
-```
-
-因为后面你做复杂能力时，日志和 meta 会非常有用。没有这些字段，调试会像摸黑走楼梯，节目效果很强，工程体验很差。
-
----
-
-## 五、如何运行和验证
-
-### 5.1 启动项目
-
-进入项目目录：
-
-```bash
-cd /Users/jianglin/Desktop/backend/AI-backend
-npm install
-npm run dev
-```
-
-如果启动正常，你应该看到类似输出：
-
-```bash
-🚀 Server ready at http://localhost:3000
-```
-
-> 端口以你的 `.env` / config 实际配置为准。
-
-### 5.2 调接口验证
-
-你可以直接用 curl 或 Apifox / Postman 测试：
-
-```bash
-curl -X POST http://localhost:3000/api/mcp-intro   -H 'Content-Type: application/json'   -d '{
-    "input": "test 理解 MCP（Model Context Protocol）模式",
-    "debug": true
-  }'
-```
-
-### 5.3 预期返回
-
-如果最小实现成功，通常会看到这样的结构：
+一个简化的 `tools/list` 请求大致像这样：
 
 ```json
 {
-  "success": true,
-  "message": "理解 MCP（Model Context Protocol）模式 执行成功",
-  "data": {
-    "result": {
-      "ok": true,
-      "feature": "mcp-intro"
-    },
-    "logs": [
-      { "stage": "thought", "content": "开始分析任务" },
-      { "stage": "action", "content": "执行 理解 MCP（Model Context Protocol）模式 的核心逻辑" },
-      { "stage": "observation", "content": "理解 MCP（Model Context Protocol）模式 的最小实现已经打通" }
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/list",
+  "params": {}
+}
+```
+
+返回值不是“随便一段文本”，而是工具清单：
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "tools": [
+      {
+        "name": "read_file",
+        "description": "Read a text file inside the workspace",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "path": { "type": "string" }
+          },
+          "required": ["path"]
+        }
+      }
     ]
   }
 }
 ```
 
-如果你拿不到这个结果，不要急着怀疑模型，先查三件事：
+### 2.2 tool schema 不是装饰，是边界
 
-1. `src/routes/index.js` 有没有挂路由
-2. controller 文件名、导入名是否写对
-3. service 有没有正确 export default
+工具定义里最关键的是：
 
----
+- `name`: 工具唯一标识
+- `description`: 给模型看的用途说明
+- `inputSchema`: 输入参数约束
+- `annotations` / `meta`: 权限、危险级别、是否有副作用
 
-## 六、结合你现有项目，这一节具体应该怎么练
+这是 MCP 的第一层安全边界。
 
-### 6.1 最推荐的练法
+如果 schema 不完整，模型会乱填参数；如果 schema 太宽松，工具就会被滥用；如果 schema 和真实实现不一致，调试会非常痛苦。
 
-不要追求一步到位把这一节做到完美，而是按这个顺序走：
+### 2.3 `resources/read` 为什么重要
 
-1. **先把最小路由打通**
-2. **再补 service 真逻辑**
-3. **再加日志**
-4. **最后再考虑 validator / schema / function 定义是否下沉**
+不是所有上下文都应该变成 tool。
 
-这是最稳的节奏。先通，再真，再好看。别反过来。
+- 读文件、读配置、读说明文档，更适合做 `resource`
+- 发起修改、执行命令、写入数据，更适合做 `tool`
 
-### 6.2 如果你想把这节接进聊天主链路
-
-你现在项目里已经有：
-
-- `chat.routes.js`
-- `chat.controller.js`
-- `ai.service.js`
-- `functionExecutor`
-- `functions/`
-- `schemas/`
-
-所以当本节能力成熟后，可以继续考虑两种接法：
-
-#### 接法一：独立接口
-适合教学和调试，最容易定位问题。
-
-#### 接法二：接入聊天链路
-适合做真正的 Agent / function calling / tool execution。
-
-也就是说，本节先做独立接口是为了学习效率，不是因为它只能独立存在。
+这样做的好处是：**读操作可以更明确地被建模为上下文访问，写操作则被保留在强约束的执行通道里**。
 
 ---
 
-## 七、常见坑
+## 三、在本地工程里怎么落地：server、registry、invoke
 
-### 7.1 容易写歪的地方
+### 3.1 server/client 边界要先画清
 
-1. **把所有逻辑都写进 controller**  
-   看起来快，后面改起来会很脏。
+在本地操作 Agent 里，边界一般是这样的：
 
-2. **一上来就改 chat 主链路**  
-   这很容易把调试复杂度拉满。先独立接口，真的省命。
+- **MCP Server**：真正持有工具实现、文件访问权限、shell 能力
+- **MCP Client**：把工具暴露给模型、负责路由调用、收集结果
+- **LLM**：只负责决定“要不要用工具、用哪个工具、传什么参数”
 
-3. **没有日志**  
-   后面做 Agent / Search / Chunk 时，你会不知道是哪一步错了。
+不要把工具实现塞进模型侧。模型不应该直接碰文件系统或 shell，它只能通过协议请求 server 执行。
 
-4. **没想清楚这一节能力属于哪层**  
-   结果 route、controller、service 三层职责混乱，最后谁都像打零工的。
+### 3.2 一个最小 registry
 
-### 7.2 建议的调试顺序
+```js
+export class ToolRegistry {
+  constructor() {
+    this.tools = new Map()
+  }
 
-出了问题，按这个顺序查：
+  register(definition) {
+    if (!definition?.name || !definition?.handler) {
+      throw new Error('Invalid tool definition')
+    }
+    this.tools.set(definition.name, definition)
+  }
 
-1. 服务有没有启动
-2. 路由有没有注册
-3. controller 有没有被命中
-4. service 是否正常返回结构
-5. 日志里有没有异常栈
+  list() {
+    return [...this.tools.values()].map(({ handler, ...meta }) => meta)
+  }
 
-这顺序很土，但很有效。别一出错就先怀疑宇宙射线。
+  async invoke(name, input, context) {
+    const tool = this.tools.get(name)
+    if (!tool) throw new Error(`Tool not found: ${name}`)
+    return tool.handler(input, context)
+  }
+}
+```
+
+这个 registry 做的不是“存数组”，而是四件事：
+
+- 注册
+- 发现
+- 校验
+- 调用
+
+这就是 MCP 工具层最小可用骨架。
+
+### 3.3 invoke 之后要返回结构化结果
+
+工具返回值最好不要只给一句自然语言，而是提供结构化字段：
+
+```json
+{
+  "ok": true,
+  "content": [
+    {
+      "type": "text",
+      "text": "read_file completed"
+    }
+  ],
+  "meta": {
+    "tool": "read_file",
+    "durationMs": 18,
+    "truncated": false
+  }
+}
+```
+
+这样做的原因很实际：
+
+- client 能做审计
+- model 能更稳定地消费结果
+- 后续可以加 diff、日志、错误码、权限提示
 
 ---
 
-## 八、小结
+## 四、调试和安全：MCP 里最容易被忽略的部分
 
-这一节的关键，不是“我又学了一个新名词”，而是：
+### 4.1 工具不是越多越好
 
-- 我知道怎样把 **理解 MCP（Model Context Protocol）模式** 放进一套真实后端工程
-- 我知道 route / controller / service 该怎么配合
-- 我知道怎样用最小接口把能力打通
-- 我知道怎样为后续的 Agent、MCP、Embedding、Chunking 铺路
+本地 Agent 最常见的错误不是“不会调用工具”，而是“给了太多工具、太少边界”。
 
-如果你能按这篇文档真的在 `AI-backend` 里敲完一次，这节才算学到了。
+建议默认遵守四个原则：
 
-否则就还是那种很熟悉的状态：字都认识，项目不会长。
+1. 只暴露当前任务真的需要的工具
+2. 读写分离，写操作必须比读操作更严格
+3. shell、网络、删除类能力必须显式授权
+4. 每次调用都记录工具名、参数摘要、结果状态
+
+### 4.2 常见调试点
+
+- `tools/list` 里看不到工具，通常是 registry 没注册成功
+- 模型参数总是乱填，通常是 `inputSchema` 不够精确
+- 工具执行了但结果不好用，通常是返回值结构过于口语化
+- 读文件失败，通常是路径限制或沙箱权限拦截
+
+### 4.3 安全底线
+
+MCP 做本地操作时，最低限度要有这些限制：
+
+- workspace root 白名单
+- 路径穿越检查
+- 大文件截断
+- shell 命令白名单
+- 写操作审计日志
+- 危险动作二次确认
+
+这些不是“高级功能”，而是本地 Agent 能不能上线的前提。
+
+---
+
+## 五、小结
+
+这一节你需要真正带走的不是概念名词，而是一个判断标准：
+
+> **当一个能力需要被发现、约束、审计、组合时，它就不该只是一个普通函数，而应该被建模为 MCP tool 或 resource。**
+
+下一节我们就把这个判断标准落到第一个具体能力上：只读文件系统工具。

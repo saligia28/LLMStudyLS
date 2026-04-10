@@ -1,388 +1,220 @@
-# Step 44: 实现文件系统读取工具
+# Step 44: MCP 实践｜实现文件系统读取工具
 
 ## 学习目标
 
-这一节不再写成“看起来像懂了”的纯讲义，而是直接以你已经实现过的项目 **`/Users/jianglin/Desktop/backend/AI-backend`** 为练习底座，讲清楚 **实现文件系统读取工具** 应该怎么落进一套真实 Node 后端工程里。
+这一节要解决的是：**怎样设计一个真正适合 MCP 的只读文件工具**。它不是简单包装 `fs.readFile`，而是要同时满足“模型可理解、client 可调度、server 可审计、权限可控制”。
 
-做完本节后，你应该能：
+学完这一节，你应该能：
 
-1. 说清楚这项能力该落在哪一层（route / controller / service / adapter / utils）
-2. 在 `AI-backend` 现有目录结构下继续扩展，而不是另起炉灶
-3. 按步骤新增文件、修改入口、跑接口、看日志
-4. 为后续 week 的 Agent / RAG / 工具系统打基础
+1. 设计一个清晰的 `read_file` 工具 schema
+2. 理解读取工具和 resource 的边界差异
+3. 写出带路径限制、大小限制、编码限制的安全读取实现
+4. 看懂一次 `tools/call` 的输入输出结构
 
-> **本节目标：** 增加只读文件工具，并做路径限制。
-
----
-
-## 一、本节内容应该落到你项目的哪里？
-
-你现在这个项目已经不是初学 demo，而是一个分层比较清楚的后端工程：
-
-```
-AI-backend/
-├── src/
-│   ├── routes/
-│   ├── controllers/
-│   ├── services/
-│   ├── adapters/
-│   ├── middleware/
-│   ├── validators/
-│   └── utils/
-├── functions/
-├── schemas/
-└── server.js
-```
-
-所以学这一节时，不要再问“我要不要新建一个 demo 项目”。答案是不需要。你应该直接在这套工程里继续长能力。
-
-### 1.1 本节推荐落点
-
-围绕 **实现文件系统读取工具**，建议这样放：
-
-- **routes**：暴露测试接口
-- **controllers**：解析请求、组织调用
-- **services**：承载核心业务逻辑
-- **utils / functions / schemas**：放辅助工具、函数定义、结构约束
-- **adapters**：如果本节涉及模型提供商差异，再往这里下沉
-
-### 1.2 本节真正要学会什么
-
-不是“我知道这个名词是什么意思”，而是：
-
-- 我知道这项能力为什么属于 service 层
-- 我知道怎样给它补一个测试接口
-- 我知道如何把执行日志暴露出来，方便调试
-- 我知道下一步它如何继续接到更大的 Agent 或 RAG 链路里
+> **本节主线：** 让模型“安全地看到文件内容”，而不是“随便摸到磁盘”。
 
 ---
 
-## 二、先设计实现方案，再动代码
+## 一、先想清楚：文件读取为什么要单独成工具
 
-### 2.1 本节建议新增 / 修改的文件
+### 1.1 读取能力的用途不是“看文件”，而是“建立上下文”
 
-先不要一上来乱写。建议按下面的文件清单推进：
+本地操作 Agent 的第一步通常不是写，而是读：
 
-```
-src/
-├── routes/
-│   └── mcp-read-file.routes.js          # 新增：本节练习接口
-├── controllers/
-│   └── mcp-read-file.controller.js      # 新增：请求入口
-├── services/
-│   └── mcp-read-file.service.js         # 新增：核心逻辑
-├── routes/index.js               # 修改：挂载新路由
-└── app.js / server.js            # 通常无需改动，除非你要挂更多中间件
-```
+- 读项目配置，确认技术栈
+- 读源码，理解已有实现
+- 读日志，定位错误
+- 读文档，补充任务上下文
 
-如果本节涉及工具定义或函数调用，还可以继续扩：
+所以文件读取工具的本质是：**把磁盘内容转成模型可消费的上下文**。
 
-```
-functions/
-└── mcp-read-file.js
+### 1.2 tool 和 resource 的边界
 
-schemas/
-└── mcp-read-file.schema.js
-```
+这一步很容易混。
 
-### 2.2 设计原则
+| 场景 | 更适合 |
+|---|---|
+| 读一个固定文档、配置、说明页 | `resource` |
+| 按路径读取工作区内任意文件 | `tool` |
+| 需要参数化、动态拼装路径、附带权限判断 | `tool` |
 
-这一节建议坚持 4 个原则：
-
-1. **核心逻辑放 service**，不要塞进 controller
-2. **controller 只做请求协调**，不做复杂业务判断
-3. **route 只负责路径和中间件**，别把逻辑写成一锅粥
-4. **先打通最小闭环，再考虑抽象与复用**
-
-这四条很朴素，但很值钱。你后面做 Agent、MCP、RAG 时，能不能不写成事故现场，基本就看它们。
+如果文件只是“静态内容源”，可以建成 resource；如果要让 Agent 主动选择路径、控制编码、限制大小，那就应该做成 tool。
 
 ---
 
-## 三、代码实操：在 AI-backend 里把这节能力接进去
+## 二、输入输出设计：别把 read tool 设计成“全能文件浏览器”
 
-### 3.1 第一步：先写 service
+### 2.1 推荐输入 schema
 
-创建文件：`src/services/mcp-read-file.service.js`
-
-```js
-import logger from '../utils/logger.js'
-
-class McpReadFileService {
-  async run(payload = {}) {
-    const startTime = Date.now()
-    const logs = []
-
-    logs.push({ stage: 'thought', content: '开始分析任务' })
-    logs.push({ stage: 'action', content: '执行 实现文件系统读取工具 的核心逻辑' })
-
-    const result = {
-      ok: true,
-      feature: 'mcp-read-file',
-      payload,
-      summary: '实现文件系统读取工具 的最小实现已经打通',
-      completedAt: new Date().toISOString(),
-    }
-
-    logs.push({ stage: 'observation', content: result.summary })
-
-    logger.info('mcp-read-file service completed', {
-      duration: Date.now() - startTime,
-    })
-
-    return { result, logs }
-  }
-}
-
-export default new McpReadFileService()
-```
-
-这一步的目标很简单：**先把输入、执行、结果、日志结构立起来**。
-
-你别嫌它朴素。真正值钱的是这个骨架，因为后面你只需要不断把“假动作”替换成“真逻辑”。
-
-### 3.2 第二步：补 controller
-
-创建文件：`src/controllers/mcp-read-file.controller.js`
-
-```js
-import { success } from '../utils/response.js'
-import mcpReadFileService from '../services/mcp-read-file.service.js'
-
-class McpReadFileController {
-  async run(req, res) {
-    const data = await mcpReadFileService.run(req.body)
-    return res.json(success(data, '实现文件系统读取工具 执行成功'))
-  }
-}
-
-export default new McpReadFileController()
-```
-
-为什么这一层要单独保留？因为后面你大概率会在这里做：
-
-- 参数校验结果接入
-- 请求上下文拼装
-- 用户身份 / 权限信息透传
-- 返回结构格式化
-
-如果你一上来全糊进 route，后面很快就会开始骂昨天的自己。
-
-### 3.3 第三步：补 route
-
-创建文件：`src/routes/mcp-read-file.routes.js`
-
-```js
-import express from 'express'
-import mcpReadFileController from '../controllers/mcp-read-file.controller.js'
-import { asyncHandler } from '../utils/asyncHandler.js'
-
-const router = express.Router()
-
-router.post('/mcp-read-file', asyncHandler(mcpReadFileController.run.bind(mcpReadFileController)))
-
-export default router
-```
-
-### 3.4 第四步：挂到总路由
-
-修改文件：`src/routes/index.js`
-
-在顶部新增：
-
-```js
-import mcpreadfileRoutes from './mcp-read-file.routes.js'
-```
-
-在路由挂载区新增：
-
-```js
-router.use('/', mcpreadfileRoutes)
-```
-
-这样本节接口就会进入统一 `/api` 前缀下。
-
-最终你可以通过下面地址访问：
-
-```
-POST /api/mcp-read-file
-```
-
----
-
-## 四、这节能力该怎么“写真”
-
-上面的代码只是最小骨架。真正练手时，你应该把本节主题替换进来。
-
-### 4.1 围绕“实现文件系统读取工具”的真实实现方向
-
-你可以按下面方式升级当前 service：
-
-- 如果这一节偏 **Agent / ReAct / MCP**：
-  - 在 `service.run()` 中增加多阶段日志
-  - 把 thought / action / observation 结构化输出
-  - 让 controller 直接返回完整执行过程
-
-- 如果这一节偏 **Embedding / Search / Chunking**：
-  - 在 service 中增加预处理、索引、检索等步骤
-  - 返回中间结果，如 score、chunk 数量、过滤结果
-  - 方便你在接口层先把链路看清楚
-
-### 4.2 推荐你至少保留这些字段
-
-建议统一返回：
-
-```js
-{
-  result: {},
-  logs: [],
-  meta: {
-    duration: 0,
-    feature: 'mcp-read-file',
-    step: 44,
-  }
-}
-```
-
-因为后面你做复杂能力时，日志和 meta 会非常有用。没有这些字段，调试会像摸黑走楼梯，节目效果很强，工程体验很差。
-
----
-
-## 五、如何运行和验证
-
-### 5.1 启动项目
-
-进入项目目录：
-
-```bash
-cd /Users/jianglin/Desktop/backend/AI-backend
-npm install
-npm run dev
-```
-
-如果启动正常，你应该看到类似输出：
-
-```bash
-🚀 Server ready at http://localhost:3000
-```
-
-> 端口以你的 `.env` / config 实际配置为准。
-
-### 5.2 调接口验证
-
-你可以直接用 curl 或 Apifox / Postman 测试：
-
-```bash
-curl -X POST http://localhost:3000/api/mcp-read-file   -H 'Content-Type: application/json'   -d '{
-    "input": "test 实现文件系统读取工具",
-    "debug": true
-  }'
-```
-
-### 5.3 预期返回
-
-如果最小实现成功，通常会看到这样的结构：
+一个稳妥的读取工具，输入不要太多，但必须够明确：
 
 ```json
 {
-  "success": true,
-  "message": "实现文件系统读取工具 执行成功",
-  "data": {
-    "result": {
-      "ok": true,
-      "feature": "mcp-read-file"
+  "type": "object",
+  "properties": {
+    "path": { "type": "string", "description": "Workspace-relative file path" },
+    "encoding": {
+      "type": "string",
+      "enum": ["utf-8", "base64"],
+      "default": "utf-8"
     },
-    "logs": [
-      { "stage": "thought", "content": "开始分析任务" },
-      { "stage": "action", "content": "执行 实现文件系统读取工具 的核心逻辑" },
-      { "stage": "observation", "content": "实现文件系统读取工具 的最小实现已经打通" }
-    ]
+    "maxBytes": { "type": "integer", "minimum": 1, "maximum": 1048576 },
+    "withStats": { "type": "boolean", "default": true }
+  },
+  "required": ["path"]
+}
+```
+
+设计思路是：
+
+- `path` 必填，其他都是可控增强项
+- 默认返回文本编码内容，必要时才支持 `base64`
+- `maxBytes` 防止 Agent 一次性吞进超大文件
+- `withStats` 让结果带上大小、修改时间等元信息
+
+### 2.2 推荐输出结构
+
+输出最好是结构化的，而不是只有一段字符串：
+
+```json
+{
+  "ok": true,
+  "path": "src/app.js",
+  "absPath": "/workspace/src/app.js",
+  "encoding": "utf-8",
+  "content": "import express from 'express'...",
+  "meta": {
+    "size": 8421,
+    "truncated": false,
+    "mimeType": "text/javascript",
+    "sha256": "..."
   }
 }
 ```
 
-如果你拿不到这个结果，不要急着怀疑模型，先查三件事：
+这样做的好处是：
 
-1. `src/routes/index.js` 有没有挂路由
-2. controller 文件名、导入名是否写对
-3. service 有没有正确 export default
-
----
-
-## 六、结合你现有项目，这一节具体应该怎么练
-
-### 6.1 最推荐的练法
-
-不要追求一步到位把这一节做到完美，而是按这个顺序走：
-
-1. **先把最小路由打通**
-2. **再补 service 真逻辑**
-3. **再加日志**
-4. **最后再考虑 validator / schema / function 定义是否下沉**
-
-这是最稳的节奏。先通，再真，再好看。别反过来。
-
-### 6.2 如果你想把这节接进聊天主链路
-
-你现在项目里已经有：
-
-- `chat.routes.js`
-- `chat.controller.js`
-- `ai.service.js`
-- `functionExecutor`
-- `functions/`
-- `schemas/`
-
-所以当本节能力成熟后，可以继续考虑两种接法：
-
-#### 接法一：独立接口
-适合教学和调试，最容易定位问题。
-
-#### 接法二：接入聊天链路
-适合做真正的 Agent / function calling / tool execution。
-
-也就是说，本节先做独立接口是为了学习效率，不是因为它只能独立存在。
+- 模型能基于 `content` 做推理
+- client 能基于 `meta` 做审计
+- 后续改写时可以比对 `sha256`
 
 ---
 
-## 七、常见坑
+## 三、代码实现：把读取逻辑写成可复用的 MCP tool
 
-### 7.1 容易写歪的地方
+### 3.1 一个最小但安全的实现
 
-1. **把所有逻辑都写进 controller**  
-   看起来快，后面改起来会很脏。
+```js
+import fs from 'node:fs/promises'
+import path from 'node:path'
+import crypto from 'node:crypto'
 
-2. **一上来就改 chat 主链路**  
-   这很容易把调试复杂度拉满。先独立接口，真的省命。
+export async function readFileTool(input, context) {
+  const root = context.workspaceRoot
+  const absPath = path.resolve(root, input.path)
 
-3. **没有日志**  
-   后面做 Agent / Search / Chunk 时，你会不知道是哪一步错了。
+  if (!absPath.startsWith(root + path.sep)) {
+    throw new Error('Path outside workspace is not allowed')
+  }
 
-4. **没想清楚这一节能力属于哪层**  
-   结果 route、controller、service 三层职责混乱，最后谁都像打零工的。
+  const stat = await fs.stat(absPath)
+  const limit = input.maxBytes ?? 256 * 1024
 
-### 7.2 建议的调试顺序
+  if (stat.size > limit) {
+    const handle = await fs.open(absPath, 'r')
+    const buffer = Buffer.alloc(limit)
+    const { bytesRead } = await handle.read(buffer, 0, limit, 0)
+    await handle.close()
+    const chunk = buffer.subarray(0, bytesRead)
+    return {
+      ok: true,
+      path: input.path,
+      absPath,
+      content: input.encoding === 'base64' ? chunk.toString('base64') : chunk.toString('utf-8'),
+      meta: {
+        size: stat.size,
+        truncated: true,
+        readBytes: bytesRead,
+        sha256: crypto.createHash('sha256').update(chunk).digest('hex')
+      }
+    }
+  }
 
-出了问题，按这个顺序查：
+  const raw = await fs.readFile(absPath)
+  const content = input.encoding === 'base64' ? raw.toString('base64') : raw.toString('utf-8')
 
-1. 服务有没有启动
-2. 路由有没有注册
-3. controller 有没有被命中
-4. service 是否正常返回结构
-5. 日志里有没有异常栈
+  return {
+    ok: true,
+    path: input.path,
+    absPath,
+    encoding: input.encoding ?? 'utf-8',
+    content,
+    meta: {
+      size: stat.size,
+      truncated: false,
+      sha256: crypto.createHash('sha256').update(raw).digest('hex')
+    }
+  }
+}
+```
 
-这顺序很土，但很有效。别一出错就先怀疑宇宙射线。
+### 3.2 tool definition 也要同步写清
+
+```js
+registry.register({
+  name: 'read_file',
+  description: 'Read a text file inside the workspace safely',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      path: { type: 'string' },
+      encoding: { type: 'string', enum: ['utf-8', 'base64'] },
+      maxBytes: { type: 'integer' }
+    },
+    required: ['path']
+  },
+  meta: {
+    sideEffect: 'read-only',
+    permission: 'workspace-read'
+  },
+  handler: readFileTool
+})
+```
+
+`meta.sideEffect = read-only` 这种标记非常重要，因为它能帮助 client 或 agent 决定是否允许自动调用。
 
 ---
 
-## 八、小结
+## 四、调试和安全：只读工具也会出问题
 
-这一节的关键，不是“我又学了一个新名词”，而是：
+### 4.1 常见风险
 
-- 我知道怎样把 **实现文件系统读取工具** 放进一套真实后端工程
-- 我知道 route / controller / service 该怎么配合
-- 我知道怎样用最小接口把能力打通
-- 我知道怎样为后续的 Agent、MCP、Embedding、Chunking 铺路
+读取工具看起来无害，但实际风险不少：
 
-如果你能按这篇文档真的在 `AI-backend` 里敲完一次，这节才算学到了。
+- 路径穿越：`../../.env`
+- 误读二进制：返回乱码污染上下文
+- 大文件轰炸：模型上下文被淹没
+- 秘密泄漏：`.env`、证书、密钥文件被读出
+- 软链接绕过：绕过 workspace 限制
 
-否则就还是那种很熟悉的状态：字都认识，项目不会长。
+### 4.2 必须做的控制
+
+1. 只允许 workspace-relative 路径
+2. 解析后再做一次根目录校验
+3. 禁止默认读取隐藏敏感文件
+4. 限制单次读取上限
+5. 记录每次读取的路径、大小和结果状态
+
+### 4.3 调试建议
+
+- 如果总是报“路径不允许”，先看 `path.resolve` 后的绝对路径
+- 如果返回内容乱码，优先检查编码，而不是先怀疑模型
+- 如果大文件被截断，要在返回值里明确告诉模型 `truncated: true`
+
+---
+
+## 五、小结
+
+文件读取工具的价值不在“读到了”，而在“读得可控、读得可解释、读得可审计”。
+
+下一节我们会在同样的思路下实现写入工具，但写入比读取多出一层关键差异：**它会改变磁盘状态，因此必须有更严格的确认、回滚和审计机制**。

@@ -1,13 +1,14 @@
 {
   "id": "week7",
   "title": "Week 7: MCP 实践",
-  "description": "学习 MCP（Model Context Protocol）设计思路，构建可供 Agent 使用的本地工具能力。",
+  "description": "围绕 MCP 协议、工具注册、资源读写、shell 执行和安全编排，构建一套可控的本地操作 Agent。",
   "order": 7,
   "steps": [
     {
       "id": "step43",
       "title": "理解 MCP（Model Context Protocol）模式",
-      "description": "学习理解 MCP（Model Context Protocol）模式，理解其在MCP 实践中的作用与实践方式。",
+      "description": "理解 MCP 与 function calling 的关系、协议消息流、tool schema、resource 以及 server/client 边界。",
+      "order": 43,
       "docFile": "step43.md",
       "codeDir": "mcp-basics",
       "canManual": false,
@@ -20,7 +21,8 @@
     {
       "id": "step44",
       "title": "实现文件系统读取工具",
-      "description": "学习实现文件系统读取工具，理解其在MCP 实践中的作用与实践方式。",
+      "description": "设计只读文件工具的输入输出、路径边界和安全读取流程，为 Agent 提供受控上下文。",
+      "order": 44,
       "docFile": "step44.md",
       "codeDir": "fs-read-tool",
       "canManual": false,
@@ -33,7 +35,8 @@
     {
       "id": "step45",
       "title": "实现文件写入工具",
-      "description": "学习实现文件写入工具，理解其在MCP 实践中的作用与实践方式。",
+      "description": "实现带备份、预览和覆盖控制的写文件工具，理解状态变更如何被安全管理。",
+      "order": 45,
       "docFile": "step45.md",
       "codeDir": "fs-write-tool",
       "canManual": false,
@@ -46,7 +49,8 @@
     {
       "id": "step46",
       "title": "实现执行 shell 命令工具",
-      "description": "学习实现执行 shell 命令工具，理解其在MCP 实践中的作用与实践方式。",
+      "description": "设计白名单 shell 工具的命令、参数、cwd、超时和输出控制，避免 Agent 获得过高权限。",
+      "order": 46,
       "docFile": "step46.md",
       "codeDir": "shell-tool",
       "canManual": false,
@@ -59,7 +63,8 @@
     {
       "id": "step47",
       "title": "给 Agent 加上 MCP 工具注册",
-      "description": "学习给 Agent 加上 MCP 工具注册，理解其在MCP 实践中的作用与实践方式。",
+      "description": "构建工具 registry、发现与调用编排机制，并按权限和风险级别向 Agent 暴露能力。",
+      "order": 47,
       "docFile": "step47.md",
       "codeDir": "mcp-register",
       "canManual": false,
@@ -72,7 +77,8 @@
     {
       "id": "step48",
       "title": "测试：让 AI 自动修改项目代码",
-      "description": "学习测试：让 AI 自动修改项目代码，理解其在MCP 实践中的作用与实践方式。",
+      "description": "把 read、patch、write、shell、验证和回滚串成一条受控的自动改码链路。",
+      "order": 48,
       "docFile": "step48.md",
       "codeDir": "code-edit-test",
       "canManual": false,
@@ -85,7 +91,8 @@
     {
       "id": "step49",
       "title": "整理“本地操作 Agent”总结",
-      "description": "学习整理“本地操作 Agent”总结，理解其在MCP 实践中的作用与实践方式。",
+      "description": "总结本地操作 Agent 的最佳实践、限制、审计规则，以及下一阶段的能力衔接。",
+      "order": 49,
       "docFile": "step49.md",
       "codeDir": "local-agent-summary",
       "canManual": false,

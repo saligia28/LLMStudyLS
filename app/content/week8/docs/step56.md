@@ -1,388 +1,186 @@
-# Step 56: 整理“项目级 Agent”文档
+# Step 56: 项目级 Agent｜整理“项目级 Agent”文档
 
 ## 学习目标
 
-这一节不再写成“看起来像懂了”的纯讲义，而是直接以你已经实现过的项目 **`/Users/jianglin/Desktop/backend/AI-backend`** 为练习底座，讲清楚 **整理“项目级 Agent”文档** 应该怎么落进一套真实 Node 后端工程里。
+这一节不是简单的复盘，而是把 Week 8 这一整套工程方法沉淀成可以继续使用的原则和文档。
 
 做完本节后，你应该能：
 
-1. 说清楚这项能力该落在哪一层（route / controller / service / adapter / utils）
-2. 在 `AI-backend` 现有目录结构下继续扩展，而不是另起炉灶
-3. 按步骤新增文件、修改入口、跑接口、看日志
-4. 为后续 week 的 Agent / RAG / 工具系统打基础
+1. 用自己的话总结项目级 Agent 的核心原则
+2. 把权限、diff、确认、任务链、验证和回滚组织成一份可读文档
+3. 明确哪些能力应该继续向 Week 9 延伸
+4. 形成一套能被团队复用的检查清单
 
-> **本节目标：** 沉淀项目级 Agent 实战总结。
-
----
-
-## 一、本节内容应该落到你项目的哪里？
-
-你现在这个项目已经不是初学 demo，而是一个分层比较清楚的后端工程：
-
-```
-AI-backend/
-├── src/
-│   ├── routes/
-│   ├── controllers/
-│   ├── services/
-│   ├── adapters/
-│   ├── middleware/
-│   ├── validators/
-│   └── utils/
-├── functions/
-├── schemas/
-└── server.js
-```
-
-所以学这一节时，不要再问“我要不要新建一个 demo 项目”。答案是不需要。你应该直接在这套工程里继续长能力。
-
-### 1.1 本节推荐落点
-
-围绕 **整理“项目级 Agent”文档**，建议这样放：
-
-- **routes**：暴露测试接口
-- **controllers**：解析请求、组织调用
-- **services**：承载核心业务逻辑
-- **utils / functions / schemas**：放辅助工具、函数定义、结构约束
-- **adapters**：如果本节涉及模型提供商差异，再往这里下沉
-
-### 1.2 本节真正要学会什么
-
-不是“我知道这个名词是什么意思”，而是：
-
-- 我知道这项能力为什么属于 service 层
-- 我知道怎样给它补一个测试接口
-- 我知道如何把执行日志暴露出来，方便调试
-- 我知道下一步它如何继续接到更大的 Agent 或 RAG 链路里
+> 文档不是课程的附属品，它是 Agent 设计能否被团队持续使用的关键。
 
 ---
 
-## 二、先设计实现方案，再动代码
+## 一、为什么项目级 Agent 一定要写文档
 
-### 2.1 本节建议新增 / 修改的文件
+项目级 Agent 的复杂度，决定了它不能只靠代码存在。
 
-先不要一上来乱写。建议按下面的文件清单推进：
+如果没有文档，你会遇到这些问题：
 
-```
-src/
-├── routes/
-│   └── project-agent.routes.js          # 新增：本节练习接口
-├── controllers/
-│   └── project-agent.controller.js      # 新增：请求入口
-├── services/
-│   └── project-agent.service.js         # 新增：核心逻辑
-├── routes/index.js               # 修改：挂载新路由
-└── app.js / server.js            # 通常无需改动，除非你要挂更多中间件
-```
+- 新人不知道系统边界在哪里
+- 维护者不知道为什么要有确认门
+- Review 时不知道 diff 的标准是什么
+- 出问题时不知道怎么回滚
+- 后续扩展时不知道哪些约束不能破
 
-如果本节涉及工具定义或函数调用，还可以继续扩：
-
-```
-functions/
-└── project-agent.js
-
-schemas/
-└── project-agent.schema.js
-```
-
-### 2.2 设计原则
-
-这一节建议坚持 4 个原则：
-
-1. **核心逻辑放 service**，不要塞进 controller
-2. **controller 只做请求协调**，不做复杂业务判断
-3. **route 只负责路径和中间件**，别把逻辑写成一锅粥
-4. **先打通最小闭环，再考虑抽象与复用**
-
-这四条很朴素，但很值钱。你后面做 Agent、MCP、RAG 时，能不能不写成事故现场，基本就看它们。
+所以文档的作用不是“解释已经写完的东西”，而是把系统的设计意图留给下一次协作。
 
 ---
 
-## 三、代码实操：在 AI-backend 里把这节能力接进去
+## 二、Week 8 的主线回顾
 
-### 3.1 第一步：先写 service
+这一周我们实际建立的是一条完整的工程链路：
 
-创建文件：`src/services/project-agent.service.js`
-
-```js
-import logger from '../utils/logger.js'
-
-class ProjectAgentService {
-  async run(payload = {}) {
-    const startTime = Date.now()
-    const logs = []
-
-    logs.push({ stage: 'thought', content: '开始分析任务' })
-    logs.push({ stage: 'action', content: '执行 整理“项目级 Agent”文档 的核心逻辑' })
-
-    const result = {
-      ok: true,
-      feature: 'project-agent',
-      payload,
-      summary: '整理“项目级 Agent”文档 的最小实现已经打通',
-      completedAt: new Date().toISOString(),
-    }
-
-    logs.push({ stage: 'observation', content: result.summary })
-
-    logger.info('project-agent service completed', {
-      duration: Date.now() - startTime,
-    })
-
-    return { result, logs }
-  }
-}
-
-export default new ProjectAgentService()
+```text
+task object
+  -> planner
+  -> permission policy
+  -> diff preview
+  -> approval gate
+  -> executor
+  -> verifier
+  -> rollback / audit
 ```
 
-这一步的目标很简单：**先把输入、执行、结果、日志结构立起来**。
+这条链路的价值在于，它把 Agent 从“会说话”提升到了“能承担工程动作”。
 
-你别嫌它朴素。真正值钱的是这个骨架，因为后面你只需要不断把“假动作”替换成“真逻辑”。
+### 2.1 这一周最重要的几个原则
 
-### 3.2 第二步：补 controller
-
-创建文件：`src/controllers/project-agent.controller.js`
-
-```js
-import { success } from '../utils/response.js'
-import projectAgentService from '../services/project-agent.service.js'
-
-class ProjectAgentController {
-  async run(req, res) {
-    const data = await projectAgentService.run(req.body)
-    return res.json(success(data, '整理“项目级 Agent”文档 执行成功'))
-  }
-}
-
-export default new ProjectAgentController()
-```
-
-为什么这一层要单独保留？因为后面你大概率会在这里做：
-
-- 参数校验结果接入
-- 请求上下文拼装
-- 用户身份 / 权限信息透传
-- 返回结构格式化
-
-如果你一上来全糊进 route，后面很快就会开始骂昨天的自己。
-
-### 3.3 第三步：补 route
-
-创建文件：`src/routes/project-agent.routes.js`
-
-```js
-import express from 'express'
-import projectAgentController from '../controllers/project-agent.controller.js'
-import { asyncHandler } from '../utils/asyncHandler.js'
-
-const router = express.Router()
-
-router.post('/project-agent', asyncHandler(projectAgentController.run.bind(projectAgentController)))
-
-export default router
-```
-
-### 3.4 第四步：挂到总路由
-
-修改文件：`src/routes/index.js`
-
-在顶部新增：
-
-```js
-import projectagentRoutes from './project-agent.routes.js'
-```
-
-在路由挂载区新增：
-
-```js
-router.use('/', projectagentRoutes)
-```
-
-这样本节接口就会进入统一 `/api` 前缀下。
-
-最终你可以通过下面地址访问：
-
-```
-POST /api/project-agent
-```
+| 原则 | 含义 |
+|---|---|
+| 任务先结构化 | 任务对象比自然语言更适合工程执行 |
+| 权限先于执行 | 不先过边界，就不要开始写 |
+| diff 先于写入 | 改动要可审查，不要黑箱执行 |
+| 确认先于高风险动作 | 用户要看懂再决定 |
+| 验证先于成功声明 | 结果必须被测试证明 |
+| 失败必须可回滚 | 真实项目不能只会成功 |
 
 ---
 
-## 四、这节能力该怎么“写真”
+## 三、机制总结：把能力写成可复用模板
 
-上面的代码只是最小骨架。真正练手时，你应该把本节主题替换进来。
+### 3.1 项目级 Agent 的文档结构建议
 
-### 4.1 围绕“整理“项目级 Agent”文档”的真实实现方向
+如果你要给团队写说明文档，可以按下面顺序组织：
 
-你可以按下面方式升级当前 service：
+```text
+1. 背景：为什么需要项目级 Agent
+2. 架构：planner / executor / verifier / approval / memory
+3. 权限：哪些动作允许，哪些动作必须审批
+4. diff：如何展示变更、如何审查风险
+5. 确认：什么情况需要人工介入
+6. 任务链：plan -> execute -> verify 的状态机
+7. 验证：通过什么命令证明改动有效
+8. 回滚：失败后如何恢复
+9. 规范：谁可以改、什么时候改、怎么审
+```
 
-- 如果这一节偏 **Agent / ReAct / MCP**：
-  - 在 `service.run()` 中增加多阶段日志
-  - 把 thought / action / observation 结构化输出
-  - 让 controller 直接返回完整执行过程
+### 3.2 可以直接复用的总结模板
 
-- 如果这一节偏 **Embedding / Search / Chunking**：
-  - 在 service 中增加预处理、索引、检索等步骤
-  - 返回中间结果，如 score、chunk 数量、过滤结果
-  - 方便你在接口层先把链路看清楚
+```md
+## 任务说明
+## 任务边界
+## 权限范围
+## 变更摘要
+## diff 预览
+## 审批结果
+## 执行结果
+## 验证命令
+## 回滚结果
+## 复盘结论
+```
 
-### 4.2 推荐你至少保留这些字段
+这类结构的好处是：每一次 Agent 改动都能被整理成同样的格式，方便 review、追踪和沉淀。
 
-建议统一返回：
+---
+
+## 四、代码示例：把一次任务执行沉淀成文档
 
 ```js
-{
-  result: {},
-  logs: [],
-  meta: {
-    duration: 0,
-    feature: 'project-agent',
-    step: 56,
+function buildProjectAgentReport(task, timeline) {
+  return {
+    title: `Project Agent Report: ${task.goal}`,
+    taskId: task.id,
+    scope: task.scope,
+    riskLevel: task.riskLevel,
+    summary: timeline.summary,
+    diff: timeline.diff,
+    approval: timeline.approval,
+    execution: timeline.execution,
+    verification: timeline.verification,
+    rollback: timeline.rollback,
+    lessons: timeline.lessons,
   }
 }
 ```
 
-因为后面你做复杂能力时，日志和 meta 会非常有用。没有这些字段，调试会像摸黑走楼梯，节目效果很强，工程体验很差。
+这段代码体现了一个很重要的思想：**文档不是事后抄写，而是系统输出的一部分。**
+
+### 4.1 文档里应该强调的几条经验
+
+- 不要把 Agent 描述成“全能助手”
+- 不要把 diff 当成附属附件
+- 不要把确认门写成纯 UI 行为
+- 不要把验证写成可选步骤
+- 不要把回滚写成异常情况的补丁
+
+文档的任务，是把这些原则固定下来。
 
 ---
 
-## 五、如何运行和验证
+## 五、风险与验证：总结必须能反哺下一轮设计
 
-### 5.1 启动项目
+项目级 Agent 的文档不是写给现在看的，而是写给下一次迭代看的。
 
-进入项目目录：
+### 5.1 复盘时建议回答的问题
 
-```bash
-cd /Users/jianglin/Desktop/backend/AI-backend
-npm install
-npm run dev
-```
+1. 哪个阶段最容易失败
+2. 哪个阶段最需要人工介入
+3. 哪些权限规则太松或太紧
+4. diff 的信息量是否足够
+5. 回滚是否真的可靠
 
-如果启动正常，你应该看到类似输出：
+### 5.2 给团队的检查清单
 
-```bash
-🚀 Server ready at http://localhost:3000
-```
-
-> 端口以你的 `.env` / config 实际配置为准。
-
-### 5.2 调接口验证
-
-你可以直接用 curl 或 Apifox / Postman 测试：
-
-```bash
-curl -X POST http://localhost:3000/api/project-agent   -H 'Content-Type: application/json'   -d '{
-    "input": "test 整理“项目级 Agent”文档",
-    "debug": true
-  }'
-```
-
-### 5.3 预期返回
-
-如果最小实现成功，通常会看到这样的结构：
-
-```json
-{
-  "success": true,
-  "message": "整理“项目级 Agent”文档 执行成功",
-  "data": {
-    "result": {
-      "ok": true,
-      "feature": "project-agent"
-    },
-    "logs": [
-      { "stage": "thought", "content": "开始分析任务" },
-      { "stage": "action", "content": "执行 整理“项目级 Agent”文档 的核心逻辑" },
-      { "stage": "observation", "content": "整理“项目级 Agent”文档 的最小实现已经打通" }
-    ]
-  }
-}
-```
-
-如果你拿不到这个结果，不要急着怀疑模型，先查三件事：
-
-1. `src/routes/index.js` 有没有挂路由
-2. controller 文件名、导入名是否写对
-3. service 有没有正确 export default
+- 任务是否结构化
+- 权限是否明确
+- diff 是否可审查
+- 确认是否分级
+- 验证是否有证据
+- 回滚是否可执行
+- 日志是否能追溯
 
 ---
 
-## 六、结合你现有项目，这一节具体应该怎么练
+## 六、给 Week 9 的铺垫
 
-### 6.1 最推荐的练法
+Week 8 解决的是“项目级 Agent 能否安全地在真实工程里单独工作”。
 
-不要追求一步到位把这一节做到完美，而是按这个顺序走：
+到了 Week 9，我们就可以继续往更复杂的方向走，比如：
 
-1. **先把最小路由打通**
-2. **再补 service 真逻辑**
-3. **再加日志**
-4. **最后再考虑 validator / schema / function 定义是否下沉**
+- 更长链路的任务协作
+- 更强的上下文管理
+- 更丰富的工具编排
+- 更复杂的多步骤执行控制
 
-这是最稳的节奏。先通，再真，再好看。别反过来。
-
-### 6.2 如果你想把这节接进聊天主链路
-
-你现在项目里已经有：
-
-- `chat.routes.js`
-- `chat.controller.js`
-- `ai.service.js`
-- `functionExecutor`
-- `functions/`
-- `schemas/`
-
-所以当本节能力成熟后，可以继续考虑两种接法：
-
-#### 接法一：独立接口
-适合教学和调试，最容易定位问题。
-
-#### 接法二：接入聊天链路
-适合做真正的 Agent / function calling / tool execution。
-
-也就是说，本节先做独立接口是为了学习效率，不是因为它只能独立存在。
+也就是说，Week 8 提供了**可控执行的地基**，Week 9 会继续在这个地基上往上搭更大的系统。
 
 ---
 
-## 七、常见坑
+## 七、总结
 
-### 7.1 容易写歪的地方
+这一周的核心，不是某一个技巧，而是一套完整原则：
 
-1. **把所有逻辑都写进 controller**  
-   看起来快，后面改起来会很脏。
+- 先结构化任务
+- 再限制权限
+- 再展示 diff
+- 再确认写入
+- 再执行验证
+- 再失败回滚
+- 最后沉淀文档
 
-2. **一上来就改 chat 主链路**  
-   这很容易把调试复杂度拉满。先独立接口，真的省命。
-
-3. **没有日志**  
-   后面做 Agent / Search / Chunk 时，你会不知道是哪一步错了。
-
-4. **没想清楚这一节能力属于哪层**  
-   结果 route、controller、service 三层职责混乱，最后谁都像打零工的。
-
-### 7.2 建议的调试顺序
-
-出了问题，按这个顺序查：
-
-1. 服务有没有启动
-2. 路由有没有注册
-3. controller 有没有被命中
-4. service 是否正常返回结构
-5. 日志里有没有异常栈
-
-这顺序很土，但很有效。别一出错就先怀疑宇宙射线。
-
----
-
-## 八、小结
-
-这一节的关键，不是“我又学了一个新名词”，而是：
-
-- 我知道怎样把 **整理“项目级 Agent”文档** 放进一套真实后端工程
-- 我知道 route / controller / service 该怎么配合
-- 我知道怎样用最小接口把能力打通
-- 我知道怎样为后续的 Agent、MCP、Embedding、Chunking 铺路
-
-如果你能按这篇文档真的在 `AI-backend` 里敲完一次，这节才算学到了。
-
-否则就还是那种很熟悉的状态：字都认识，项目不会长。
+如果把这七步真正做扎实，项目级 Agent 才算真正开始进入工程世界。

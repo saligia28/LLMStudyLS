@@ -1,388 +1,229 @@
-# Step 60: 实现 search 查询
+# Step 60: Embedding + 向量存储｜实现 search 查询
 
 ## 学习目标
 
-这一节不再写成“看起来像懂了”的纯讲义，而是直接以你已经实现过的项目 **`/Users/jianglin/Desktop/backend/AI-backend`** 为练习底座，讲清楚 **实现 search 查询** 应该怎么落进一套真实 Node 后端工程里。
+这一节的本质问题是：**用户输入一句话以后，系统如何把它变成 query embedding，再去向量库里找出最相关的候选结果？**
 
-做完本节后，你应该能：
+通过本教程，你将：
 
-1. 说清楚这项能力该落在哪一层（route / controller / service / adapter / utils）
-2. 在 `AI-backend` 现有目录结构下继续扩展，而不是另起炉灶
-3. 按步骤新增文件、修改入口、跑接口、看日志
-4. 为后续 week 的 Agent / RAG / 工具系统打基础
+1. 理解 search 查询的完整链路：输入、向量化、召回、排序、返回
+2. 掌握向量库检索接口里常见的参数：`queryEmbeddings`、`nResults`、`where`
+3. 明白 query embedding 必须和文档 embedding 使用同一个模型
+4. 学会把检索结果整理成 `score + metadata + document` 的可用结构
+5. 为下一节的阈值过滤和 Top-K 组合策略打基础
 
-> **本节目标：** 实现语义搜索接口。
-
----
-
-## 一、本节内容应该落到你项目的哪里？
-
-你现在这个项目已经不是初学 demo，而是一个分层比较清楚的后端工程：
-
-```
-AI-backend/
-├── src/
-│   ├── routes/
-│   ├── controllers/
-│   ├── services/
-│   ├── adapters/
-│   ├── middleware/
-│   ├── validators/
-│   └── utils/
-├── functions/
-├── schemas/
-└── server.js
-```
-
-所以学这一节时，不要再问“我要不要新建一个 demo 项目”。答案是不需要。你应该直接在这套工程里继续长能力。
-
-### 1.1 本节推荐落点
-
-围绕 **实现 search 查询**，建议这样放：
-
-- **routes**：暴露测试接口
-- **controllers**：解析请求、组织调用
-- **services**：承载核心业务逻辑
-- **utils / functions / schemas**：放辅助工具、函数定义、结构约束
-- **adapters**：如果本节涉及模型提供商差异，再往这里下沉
-
-### 1.2 本节真正要学会什么
-
-不是“我知道这个名词是什么意思”，而是：
-
-- 我知道这项能力为什么属于 service 层
-- 我知道怎样给它补一个测试接口
-- 我知道如何把执行日志暴露出来，方便调试
-- 我知道下一步它如何继续接到更大的 Agent 或 RAG 链路里
+> **本节目标**：把“向量存储”真正连到“语义搜索”上，形成可运行的检索闭环。
 
 ---
 
-## 二、先设计实现方案，再动代码
+## 一、search 查询的完整流程
 
-### 2.1 本节建议新增 / 修改的文件
+### 1.1 从一句话到结果列表
 
-先不要一上来乱写。建议按下面的文件清单推进：
-
-```
-src/
-├── routes/
-│   └── vector-search.routes.js          # 新增：本节练习接口
-├── controllers/
-│   └── vector-search.controller.js      # 新增：请求入口
-├── services/
-│   └── vector-search.service.js         # 新增：核心逻辑
-├── routes/index.js               # 修改：挂载新路由
-└── app.js / server.js            # 通常无需改动，除非你要挂更多中间件
-```
-
-如果本节涉及工具定义或函数调用，还可以继续扩：
+一个典型的 search 流程通常是这样：
 
 ```
-functions/
-└── vector-search.js
-
-schemas/
-└── vector-search.schema.js
+用户查询
+   ↓
+文本预处理
+   ↓
+query embedding
+   ↓
+向量库召回候选
+   ↓
+metadata filter
+   ↓
+按相似度排序
+   ↓
+返回 Top-K 结果
 ```
 
-### 2.2 设计原则
+这条链路里，真正的核心只有两步：
 
-这一节建议坚持 4 个原则：
+- 把查询转成向量
+- 在向量空间里做相似度匹配
 
-1. **核心逻辑放 service**，不要塞进 controller
-2. **controller 只做请求协调**，不做复杂业务判断
-3. **route 只负责路径和中间件**，别把逻辑写成一锅粥
-4. **先打通最小闭环，再考虑抽象与复用**
+其他步骤都是为了让结果更稳、更准、更可控。
 
-这四条很朴素，但很值钱。你后面做 Agent、MCP、RAG 时，能不能不写成事故现场，基本就看它们。
+### 1.2 为什么不能直接拿原始文本去比
+
+原始文本之间没法直接算语义距离。你能比较的是字符是否一样、词是否重复，但不是“意思是否接近”。
+
+所以必须先把查询文本变成 embedding，然后再去和库里的向量做匹配。这也是 embedding 搜索和关键词搜索最根本的区别。
 
 ---
 
-## 三、代码实操：在 AI-backend 里把这节能力接进去
+## 二、search 的最小实现
 
-### 3.1 第一步：先写 service
-
-创建文件：`src/services/vector-search.service.js`
+### 2.1 先把 query 向量化
 
 ```js
-import logger from '../utils/logger.js'
-
-class VectorSearchService {
-  async run(payload = {}) {
-    const startTime = Date.now()
-    const logs = []
-
-    logs.push({ stage: 'thought', content: '开始分析任务' })
-    logs.push({ stage: 'action', content: '执行 实现 search 查询 的核心逻辑' })
-
-    const result = {
-      ok: true,
-      feature: 'vector-search',
-      payload,
-      summary: '实现 search 查询 的最小实现已经打通',
-      completedAt: new Date().toISOString(),
-    }
-
-    logs.push({ stage: 'observation', content: result.summary })
-
-    logger.info('vector-search service completed', {
-      duration: Date.now() - startTime,
-    })
-
-    return { result, logs }
-  }
-}
-
-export default new VectorSearchService()
-```
-
-这一步的目标很简单：**先把输入、执行、结果、日志结构立起来**。
-
-你别嫌它朴素。真正值钱的是这个骨架，因为后面你只需要不断把“假动作”替换成“真逻辑”。
-
-### 3.2 第二步：补 controller
-
-创建文件：`src/controllers/vector-search.controller.js`
-
-```js
-import { success } from '../utils/response.js'
-import vectorSearchService from '../services/vector-search.service.js'
-
-class VectorSearchController {
-  async run(req, res) {
-    const data = await vectorSearchService.run(req.body)
-    return res.json(success(data, '实现 search 查询 执行成功'))
-  }
-}
-
-export default new VectorSearchController()
-```
-
-为什么这一层要单独保留？因为后面你大概率会在这里做：
-
-- 参数校验结果接入
-- 请求上下文拼装
-- 用户身份 / 权限信息透传
-- 返回结构格式化
-
-如果你一上来全糊进 route，后面很快就会开始骂昨天的自己。
-
-### 3.3 第三步：补 route
-
-创建文件：`src/routes/vector-search.routes.js`
-
-```js
-import express from 'express'
-import vectorSearchController from '../controllers/vector-search.controller.js'
-import { asyncHandler } from '../utils/asyncHandler.js'
-
-const router = express.Router()
-
-router.post('/vector-search', asyncHandler(vectorSearchController.run.bind(vectorSearchController)))
-
-export default router
-```
-
-### 3.4 第四步：挂到总路由
-
-修改文件：`src/routes/index.js`
-
-在顶部新增：
-
-```js
-import vectorsearchRoutes from './vector-search.routes.js'
-```
-
-在路由挂载区新增：
-
-```js
-router.use('/', vectorsearchRoutes)
-```
-
-这样本节接口就会进入统一 `/api` 前缀下。
-
-最终你可以通过下面地址访问：
-
-```
-POST /api/vector-search
-```
-
----
-
-## 四、这节能力该怎么“写真”
-
-上面的代码只是最小骨架。真正练手时，你应该把本节主题替换进来。
-
-### 4.1 围绕“实现 search 查询”的真实实现方向
-
-你可以按下面方式升级当前 service：
-
-- 如果这一节偏 **Agent / ReAct / MCP**：
-  - 在 `service.run()` 中增加多阶段日志
-  - 把 thought / action / observation 结构化输出
-  - 让 controller 直接返回完整执行过程
-
-- 如果这一节偏 **Embedding / Search / Chunking**：
-  - 在 service 中增加预处理、索引、检索等步骤
-  - 返回中间结果，如 score、chunk 数量、过滤结果
-  - 方便你在接口层先把链路看清楚
-
-### 4.2 推荐你至少保留这些字段
-
-建议统一返回：
-
-```js
-{
-  result: {},
-  logs: [],
-  meta: {
-    duration: 0,
-    feature: 'vector-search',
-    step: 60,
-  }
+async function buildQueryVector(embeddingService, query) {
+  const [result] = await embeddingService.embedTexts([query])
+  return result.vector
 }
 ```
 
-因为后面你做复杂能力时，日志和 meta 会非常有用。没有这些字段，调试会像摸黑走楼梯，节目效果很强，工程体验很差。
+这里有一个重要约定：
 
----
+- 文档和查询必须使用同一个 embedding 模型
+- 否则向量不在同一空间里，分数就不可靠
 
-## 五、如何运行和验证
+### 2.2 再向向量库发起检索
 
-### 5.1 启动项目
+如果你使用的是 Chroma 风格的接口，通常可以这样写：
 
-进入项目目录：
+```js
+async function search(collection, queryVector, { topK = 5, filters = {} } = {}) {
+  const response = await collection.query({
+    queryEmbeddings: [queryVector],
+    nResults: topK,
+    where: filters,
+    include: ['documents', 'metadatas', 'distances'],
+  })
 
-```bash
-cd /Users/jianglin/Desktop/backend/AI-backend
-npm install
-npm run dev
-```
-
-如果启动正常，你应该看到类似输出：
-
-```bash
-🚀 Server ready at http://localhost:3000
-```
-
-> 端口以你的 `.env` / config 实际配置为准。
-
-### 5.2 调接口验证
-
-你可以直接用 curl 或 Apifox / Postman 测试：
-
-```bash
-curl -X POST http://localhost:3000/api/vector-search   -H 'Content-Type: application/json'   -d '{
-    "input": "test 实现 search 查询",
-    "debug": true
-  }'
-```
-
-### 5.3 预期返回
-
-如果最小实现成功，通常会看到这样的结构：
-
-```json
-{
-  "success": true,
-  "message": "实现 search 查询 执行成功",
-  "data": {
-    "result": {
-      "ok": true,
-      "feature": "vector-search"
-    },
-    "logs": [
-      { "stage": "thought", "content": "开始分析任务" },
-      { "stage": "action", "content": "执行 实现 search 查询 的核心逻辑" },
-      { "stage": "observation", "content": "实现 search 查询 的最小实现已经打通" }
-    ]
-  }
+  return response
 }
 ```
 
-如果你拿不到这个结果，不要急着怀疑模型，先查三件事：
+这几个参数非常关键：
 
-1. `src/routes/index.js` 有没有挂路由
-2. controller 文件名、导入名是否写对
-3. service 有没有正确 export default
+- `queryEmbeddings`：查询向量
+- `nResults`：要召回多少个候选
+- `where`：metadata 过滤条件
+- `include`：返回哪些字段，便于后续组装结果
 
----
+### 2.3 把结果整理成应用层结构
 
-## 六、结合你现有项目，这一节具体应该怎么练
+```js
+function normalizeSearchResults(response) {
+  const documents = response.documents?.[0] ?? []
+  const metadatas = response.metadatas?.[0] ?? []
+  const distances = response.distances?.[0] ?? []
 
-### 6.1 最推荐的练法
+  return documents.map((document, index) => ({
+    document,
+    metadata: metadatas[index] ?? {},
+    distance: distances[index] ?? null,
+  }))
+}
+```
 
-不要追求一步到位把这一节做到完美，而是按这个顺序走：
+不同向量库对返回值的命名不一定完全一样，但你的应用层最好统一成一个结构。这样上层逻辑只需要关心：
 
-1. **先把最小路由打通**
-2. **再补 service 真逻辑**
-3. **再加日志**
-4. **最后再考虑 validator / schema / function 定义是否下沉**
-
-这是最稳的节奏。先通，再真，再好看。别反过来。
-
-### 6.2 如果你想把这节接进聊天主链路
-
-你现在项目里已经有：
-
-- `chat.routes.js`
-- `chat.controller.js`
-- `ai.service.js`
-- `functionExecutor`
-- `functions/`
-- `schemas/`
-
-所以当本节能力成熟后，可以继续考虑两种接法：
-
-#### 接法一：独立接口
-适合教学和调试，最容易定位问题。
-
-#### 接法二：接入聊天链路
-适合做真正的 Agent / function calling / tool execution。
-
-也就是说，本节先做独立接口是为了学习效率，不是因为它只能独立存在。
+- 文档内容
+- 元数据
+- 分数或距离
 
 ---
 
-## 七、常见坑
+## 三、metadata filter 是怎么进入检索的
 
-### 7.1 容易写歪的地方
+### 3.1 什么时候先过滤
 
-1. **把所有逻辑都写进 controller**  
-   看起来快，后面改起来会很脏。
+如果你的库支持在 query 时直接使用 metadata 过滤，那么最好直接放在检索接口里。比如：
 
-2. **一上来就改 chat 主链路**  
-   这很容易把调试复杂度拉满。先独立接口，真的省命。
+- 只查 `category = account`
+- 只查 `version = v2`
+- 只查 `language = zh`
 
-3. **没有日志**  
-   后面做 Agent / Search / Chunk 时，你会不知道是哪一步错了。
+这种做法通常更高效，因为它能在召回阶段就缩小范围。
 
-4. **没想清楚这一节能力属于哪层**  
-   结果 route、controller、service 三层职责混乱，最后谁都像打零工的。
+### 3.2 一个过滤示例
 
-### 7.2 建议的调试顺序
+```js
+const response = await collection.query({
+  queryEmbeddings: [queryVector],
+  nResults: 10,
+  where: {
+    category: 'account',
+    language: 'zh',
+  },
+  include: ['documents', 'metadatas', 'distances'],
+})
+```
 
-出了问题，按这个顺序查：
+这会让系统优先在“正确的子空间”里找结果，而不是把所有数据混在一起再靠后处理硬筛。
 
-1. 服务有没有启动
-2. 路由有没有注册
-3. controller 有没有被命中
-4. service 是否正常返回结构
-5. 日志里有没有异常栈
+### 3.3 如果库不支持 where
 
-这顺序很土，但很有效。别一出错就先怀疑宇宙射线。
+有些实现不支持 query 时直接过滤，或者你想先做更复杂的业务筛选，那么可以先召回，再在应用层过滤：
+
+```js
+const candidates = normalizeSearchResults(response)
+const filtered = candidates.filter((item) => item.metadata.category === 'account')
+```
+
+这个方式更灵活，但也意味着你要承担更多后处理成本。
 
 ---
 
-## 八、小结
+## 四、一个完整的 search 服务示例
 
-这一节的关键，不是“我又学了一个新名词”，而是：
+```js
+async function searchDocuments({
+  embeddingService,
+  collection,
+  query,
+  topK = 5,
+  filters = {},
+}) {
+  const [queryItem] = await embeddingService.embedTexts([query])
 
-- 我知道怎样把 **实现 search 查询** 放进一套真实后端工程
-- 我知道 route / controller / service 该怎么配合
-- 我知道怎样用最小接口把能力打通
-- 我知道怎样为后续的 Agent、MCP、Embedding、Chunking 铺路
+  const raw = await collection.query({
+    queryEmbeddings: [queryItem.vector],
+    nResults: topK,
+    where: filters,
+    include: ['documents', 'metadatas', 'distances'],
+  })
 
-如果你能按这篇文档真的在 `AI-backend` 里敲完一次，这节才算学到了。
+  return normalizeSearchResults(raw).map((item) => ({
+    ...item,
+    query,
+  }))
+}
+```
 
-否则就还是那种很熟悉的状态：字都认识，项目不会长。
+这个函数体现了 search 服务最核心的职责：
+
+- 把查询文本向量化
+- 调向量库召回候选
+- 统一整理结果结构
+- 不把底层库的返回原样暴露给上层
+
+---
+
+## 五、结果分数怎么看
+
+### 5.1 distance 和 score 不一定是同一个概念
+
+有些向量库返回的是 `distance`，有些返回的是 `score`。这两个词不是同义词：
+
+- `score` 通常表示越大越相关
+- `distance` 通常表示越小越接近
+
+所以你需要在应用层统一解释它们，避免后面过滤逻辑写反。
+
+### 5.2 一个简单的统一函数
+
+```js
+function distanceToScore(distance) {
+  if (distance === null || distance === undefined) return 0
+  return 1 - distance
+}
+```
+
+如果你的库本身就是直接返回相似度分数，那就不需要再做转换。关键是：**应用层要用一种稳定的语义理解分数**。
+
+---
+
+## 六、总结
+
+这一节你要记住的，是 search 查询的四个核心动作：
+
+1. 查询文本要先变成 query embedding
+2. query embedding 要和文档向量处于同一空间
+3. metadata filter 能让召回更精准
+4. 最终返回的结构要方便后面的阈值过滤和工程封装
+
+下一节，我们就把“找得到”升级成“只返回足够相关的结果”，也就是阈值过滤和 Top-K 组合策略。

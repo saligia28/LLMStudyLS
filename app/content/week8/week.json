@@ -1,13 +1,14 @@
 {
   "id": "week8",
   "title": "Week 8: 项目级 Agent",
-  "description": "面向真实工程场景，学习权限、diff、确认与任务链，让 Agent 具备可控的项目级执行能力。",
+  "description": "围绕真实工程执行链路，系统学习项目级 Agent 的架构拆解、权限分级、diff 审查、确认门、任务链编排、验证与回滚，以及真实项目演练。",
   "order": 8,
   "steps": [
     {
       "id": "step50",
       "title": "规划一个“工程师 Agent”架构",
-      "description": "学习规划一个“工程师 Agent”架构，理解其在项目级 Agent中的作用与实践方式。",
+      "order": 50,
+      "description": "拆解工程师 Agent 的核心模块，建立 planner、executor、verifier、memory 和 approval 的系统协作视角。",
       "docFile": "step50.md",
       "codeDir": "engineer-agent-arch",
       "canManual": false,
@@ -20,7 +21,8 @@
     {
       "id": "step51",
       "title": "设置权限控制",
-      "description": "学习设置权限控制，理解其在项目级 Agent中的作用与实践方式。",
+      "order": 51,
+      "description": "设计按操作风险分层的权限模型，让 Agent 在读、写、执行命令时都经过明确授权与限制。",
       "docFile": "step51.md",
       "codeDir": "permission-control",
       "canManual": false,
@@ -33,7 +35,8 @@
     {
       "id": "step52",
       "title": "实现文件 diff 输出",
-      "description": "学习实现文件 diff 输出，理解其在项目级 Agent中的作用与实践方式。",
+      "order": 52,
+      "description": "把代码修改转换成可审查的 diff 输出，让用户先看懂变化，再决定是否接受执行结果。",
       "docFile": "step52.md",
       "codeDir": "file-diff",
       "canManual": false,
@@ -46,7 +49,8 @@
     {
       "id": "step53",
       "title": "加入重写文件前的确认机制",
-      "description": "学习加入重写文件前的确认机制，理解其在项目级 Agent中的作用与实践方式。",
+      "order": 53,
+      "description": "建立 rewrite 前确认门、变更摘要和人机交互反馈，避免 Agent 直接覆盖关键文件。",
       "docFile": "step53.md",
       "codeDir": "rewrite-confirm",
       "canManual": false,
@@ -59,7 +63,8 @@
     {
       "id": "step54",
       "title": "加入任务链（plan → execute → verify）",
-      "description": "学习加入任务链（plan → execute → verify），理解其在项目级 Agent中的作用与实践方式。",
+      "order": 54,
+      "description": "把计划、执行、验证和失败恢复串成状态明确的任务链，减少长任务中的失控和返工。",
       "docFile": "step54.md",
       "codeDir": "task-chain",
       "canManual": false,
@@ -72,7 +77,8 @@
     {
       "id": "step55",
       "title": "做一次真实项目测试",
-      "description": "学习做一次真实项目测试，理解其在项目级 Agent中的作用与实践方式。",
+      "order": 55,
+      "description": "用真实改码任务演练项目级 Agent 的完整执行链路，观察计划质量、审查体验和验证结果。",
       "docFile": "step55.md",
       "codeDir": "real-project-test",
       "canManual": false,
@@ -85,7 +91,8 @@
     {
       "id": "step56",
       "title": "整理“项目级 Agent”文档",
-      "description": "学习整理“项目级 Agent”文档，理解其在项目级 Agent中的作用与实践方式。",
+      "order": 56,
+      "description": "沉淀项目级 Agent 的设计原则、限制条件和最佳实践，为后续更复杂的检索与执行系统打基础。",
       "docFile": "step56.md",
       "codeDir": "project-agent-docs",
       "canManual": false,

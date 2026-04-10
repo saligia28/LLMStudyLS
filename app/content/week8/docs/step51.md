@@ -1,388 +1,220 @@
-# Step 51: 设置权限控制
+# Step 51: 项目级 Agent｜设置权限控制
 
 ## 学习目标
 
-这一节不再写成“看起来像懂了”的纯讲义，而是直接以你已经实现过的项目 **`/Users/jianglin/Desktop/backend/AI-backend`** 为练习底座，讲清楚 **设置权限控制** 应该怎么落进一套真实 Node 后端工程里。
+这一节的重点不是“加一个 if 判断”，而是建立一套真正能用在项目级 Agent 里的权限模型。
 
 做完本节后，你应该能：
 
-1. 说清楚这项能力该落在哪一层（route / controller / service / adapter / utils）
-2. 在 `AI-backend` 现有目录结构下继续扩展，而不是另起炉灶
-3. 按步骤新增文件、修改入口、跑接口、看日志
-4. 为后续 week 的 Agent / RAG / 工具系统打基础
+1. 把权限分成读、写、删、执行、联网、敏感操作几个层级
+2. 为不同风险动作设计不同的审批门
+3. 用风险矩阵判断任务是否允许进入执行阶段
+4. 让权限控制和 task object、diff、确认、回滚自然衔接
 
-> **本节目标：** 增加 read/write/exec 权限控制。
-
----
-
-## 一、本节内容应该落到你项目的哪里？
-
-你现在这个项目已经不是初学 demo，而是一个分层比较清楚的后端工程：
-
-```
-AI-backend/
-├── src/
-│   ├── routes/
-│   ├── controllers/
-│   ├── services/
-│   ├── adapters/
-│   ├── middleware/
-│   ├── validators/
-│   └── utils/
-├── functions/
-├── schemas/
-└── server.js
-```
-
-所以学这一节时，不要再问“我要不要新建一个 demo 项目”。答案是不需要。你应该直接在这套工程里继续长能力。
-
-### 1.1 本节推荐落点
-
-围绕 **设置权限控制**，建议这样放：
-
-- **routes**：暴露测试接口
-- **controllers**：解析请求、组织调用
-- **services**：承载核心业务逻辑
-- **utils / functions / schemas**：放辅助工具、函数定义、结构约束
-- **adapters**：如果本节涉及模型提供商差异，再往这里下沉
-
-### 1.2 本节真正要学会什么
-
-不是“我知道这个名词是什么意思”，而是：
-
-- 我知道这项能力为什么属于 service 层
-- 我知道怎样给它补一个测试接口
-- 我知道如何把执行日志暴露出来，方便调试
-- 我知道下一步它如何继续接到更大的 Agent 或 RAG 链路里
+> 权限不是附属功能，它是项目级 Agent 的第一道边界。
 
 ---
 
-## 二、先设计实现方案，再动代码
+## 一、问题背景：为什么项目级 Agent 必须先谈权限
 
-### 2.1 本节建议新增 / 修改的文件
+项目级 Agent 一旦连上真实仓库，就不再是“想说什么就说什么”的聊天工具，而是一个会碰代码、碰命令、碰测试、碰配置的执行者。
 
-先不要一上来乱写。建议按下面的文件清单推进：
+如果没有权限控制，常见事故会是：
 
-```
-src/
-├── routes/
-│   └── permission.routes.js          # 新增：本节练习接口
-├── controllers/
-│   └── permission.controller.js      # 新增：请求入口
-├── services/
-│   └── permission.service.js         # 新增：核心逻辑
-├── routes/index.js               # 修改：挂载新路由
-└── app.js / server.js            # 通常无需改动，除非你要挂更多中间件
-```
+- 读取了不该暴露的 `.env`
+- 修改了不该写的生产配置
+- 执行了危险 shell 命令
+- 对外联网抓取了不该访问的数据
+- 把本该人工确认的变更自动执行了
 
-如果本节涉及工具定义或函数调用，还可以继续扩：
+所以权限控制不是“安全附加项”，而是系统能否进入真实项目的前提。
 
-```
-functions/
-└── permission.js
+### 1.1 权限应该回答的三个问题
 
-schemas/
-└── permission.schema.js
-```
+1. 这个任务允许访问哪些资源
+2. 这个动作在当前风险等级下能不能执行
+3. 如果不能执行，需要谁来确认
 
-### 2.2 设计原则
-
-这一节建议坚持 4 个原则：
-
-1. **核心逻辑放 service**，不要塞进 controller
-2. **controller 只做请求协调**，不做复杂业务判断
-3. **route 只负责路径和中间件**，别把逻辑写成一锅粥
-4. **先打通最小闭环，再考虑抽象与复用**
-
-这四条很朴素，但很值钱。你后面做 Agent、MCP、RAG 时，能不能不写成事故现场，基本就看它们。
+这三个问题不清楚，Agent 就会在“看起来很聪明”和“实际很危险”之间来回切换。
 
 ---
 
-## 三、代码实操：在 AI-backend 里把这节能力接进去
+## 二、架构拆解：权限控制应该放在哪些点
 
-### 3.1 第一步：先写 service
+权限控制不是单点，而是贯穿任务生命周期。
 
-创建文件：`src/services/permission.service.js`
+### 2.1 推荐的权限链路
+
+```text
+user request
+   |
+   v
+task parser -> scope resolver -> permission checker -> approval gate
+   |                                   |
+   |                                   v
+   |                             policy decision
+   v
+executor -> audit log -> verifier
+```
+
+### 2.2 典型权限维度
+
+| 维度 | 例子 | 风险 |
+|---|---|---|
+| 文件读取 | `src/**`, `docs/**` | 低到中 |
+| 文件写入 | `src/services/**` | 中到高 |
+| 文件删除 | 删除旧实现、删除目录 | 高 |
+| 命令执行 | `npm test`, `git diff` | 中到高 |
+| 网络访问 | 调接口、拉远程资源 | 中到高 |
+| 密钥访问 | `.env`, secret store | 极高 |
+
+项目级 Agent 的理想状态不是“所有动作都允许”，而是“每个动作都能被解释、被限制、被审计”。
+
+---
+
+## 三、机制设计：权限分级与风险矩阵
+
+最实用的做法，是先把动作分级，再把任务映射到分级规则里。
+
+### 3.1 权限等级示意
+
+```text
+Level 0: 只读
+  - 读文档
+  - 读源码
+  - 看日志
+
+Level 1: 安全写入
+  - 修改教程文档
+  - 修改非关键配置
+
+Level 2: 受控写入
+  - 修改业务代码
+  - 新增测试
+  - 创建 patch
+
+Level 3: 受控执行
+  - 跑 lint / test / build
+  - 执行受限 shell 命令
+
+Level 4: 高风险动作
+  - 删除文件
+  - 改生产配置
+  - 访问密钥
+  - 强制推送
+```
+
+### 3.2 风险矩阵
+
+| 动作 | 读 | 写 | 删 | exec | network | secret |
+|---|---:|---:|---:|---:|---:|---:|
+| docs 修改 | 1 | 1 | 0 | 0 | 0 | 0 |
+| 代码重构 | 1 | 1 | 0 | 1 | 0 | 0 |
+| 删除旧文件 | 1 | 1 | 1 | 0 | 0 | 0 |
+| 跑测试 | 0 | 0 | 0 | 1 | 0 | 0 |
+| 拉远程依赖 | 0 | 0 | 0 | 1 | 1 | 0 |
+| 读取密钥 | 1 | 0 | 0 | 0 | 0 | 1 |
+
+矩阵的意义不是“表格好看”，而是让系统在执行前能回答：
+
+- 这一步是低风险还是高风险
+- 是否需要人工确认
+- 是否允许自动执行
+
+---
+
+## 四、代码示例：一个可落地的权限检查器
+
+下面这个例子展示的是“先判定，再执行”的思路。
 
 ```js
-import logger from '../utils/logger.js'
-
-class PermissionService {
-  async run(payload = {}) {
-    const startTime = Date.now()
-    const logs = []
-
-    logs.push({ stage: 'thought', content: '开始分析任务' })
-    logs.push({ stage: 'action', content: '执行 设置权限控制 的核心逻辑' })
-
-    const result = {
-      ok: true,
-      feature: 'permission',
-      payload,
-      summary: '设置权限控制 的最小实现已经打通',
-      completedAt: new Date().toISOString(),
-    }
-
-    logs.push({ stage: 'observation', content: result.summary })
-
-    logger.info('permission service completed', {
-      duration: Date.now() - startTime,
-    })
-
-    return { result, logs }
-  }
+const defaultPolicy = {
+  allowRead: ['docs/**', 'src/**', 'package.json'],
+  allowWrite: ['docs/**', 'src/**'],
+  allowExec: ['npm test', 'npm run lint', 'git diff'],
+  denyWrite: ['.env', '.git/**', 'node_modules/**'],
+  denyExec: ['rm -rf *', 'sudo *', 'git push --force'],
+  requireApproval: ['write:src/**', 'exec:npm run build', 'delete:*'],
 }
 
-export default new PermissionService()
-```
-
-这一步的目标很简单：**先把输入、执行、结果、日志结构立起来**。
-
-你别嫌它朴素。真正值钱的是这个骨架，因为后面你只需要不断把“假动作”替换成“真逻辑”。
-
-### 3.2 第二步：补 controller
-
-创建文件：`src/controllers/permission.controller.js`
-
-```js
-import { success } from '../utils/response.js'
-import permissionService from '../services/permission.service.js'
-
-class PermissionController {
-  async run(req, res) {
-    const data = await permissionService.run(req.body)
-    return res.json(success(data, '设置权限控制 执行成功'))
-  }
+function matchPattern(value, patterns = []) {
+  return patterns.some((pattern) => value.startsWith(pattern.replace('/**', '')))
 }
 
-export default new PermissionController()
+function checkPermission(task, action) {
+  if (action.type === 'write' && matchPattern(action.path, defaultPolicy.denyWrite)) {
+    return { allowed: false, reason: '写入敏感路径被拒绝' }
+  }
+
+  if (action.type === 'exec' && defaultPolicy.denyExec.some((cmd) => action.command.startsWith(cmd.replace(' *', '')))) {
+    return { allowed: false, reason: '危险命令被拒绝' }
+  }
+
+  const approvalKey = `${action.type}:${action.target || action.path || action.command}`
+  if (defaultPolicy.requireApproval.includes(approvalKey)) {
+    return { allowed: false, needApproval: true, reason: '需要人工确认' }
+  }
+
+  return { allowed: true }
+}
 ```
 
-为什么这一层要单独保留？因为后面你大概率会在这里做：
+这段代码的核心不是字符串匹配，而是把“系统允许什么”从业务逻辑里抽出来，变成一个清晰的 policy 层。
 
-- 参数校验结果接入
-- 请求上下文拼装
-- 用户身份 / 权限信息透传
-- 返回结构格式化
-
-如果你一上来全糊进 route，后面很快就会开始骂昨天的自己。
-
-### 3.3 第三步：补 route
-
-创建文件：`src/routes/permission.routes.js`
+### 4.1 推荐再加一层权限解析
 
 ```js
-import express from 'express'
-import permissionController from '../controllers/permission.controller.js'
-import { asyncHandler } from '../utils/asyncHandler.js'
-
-const router = express.Router()
-
-router.post('/permission', asyncHandler(permissionController.run.bind(permissionController)))
-
-export default router
+function resolveScope(task) {
+  return {
+    repo: task.scope.repo,
+    readable: task.scope.include ?? [],
+    writable: task.scope.write ?? [],
+    forbidden: task.scope.exclude ?? [],
+    maxRisk: task.riskLevel ?? 'medium',
+  }
+}
 ```
 
-### 3.4 第四步：挂到总路由
-
-修改文件：`src/routes/index.js`
-
-在顶部新增：
-
-```js
-import permissionRoutes from './permission.routes.js'
-```
-
-在路由挂载区新增：
-
-```js
-router.use('/', permissionRoutes)
-```
-
-这样本节接口就会进入统一 `/api` 前缀下。
-
-最终你可以通过下面地址访问：
-
-```
-POST /api/permission
-```
+这样 planner 输出的 scope，approval 才能真正接住。
 
 ---
 
-## 四、这节能力该怎么“写真”
+## 五、风险与验证：权限要可测试、可审计、可解释
 
-上面的代码只是最小骨架。真正练手时，你应该把本节主题替换进来。
+权限系统最怕“写了等于没写”，所以必须验证它真的生效。
 
-### 4.1 围绕“设置权限控制”的真实实现方向
+### 5.1 必须覆盖的测试场景
 
-你可以按下面方式升级当前 service：
+- 只读任务不能触发写入
+- 写入任务不能覆盖敏感路径
+- 删除任务必须进入审批
+- 高风险命令必须被拦截
+- 白名单命令可以自动执行
+- 被拒绝的动作必须留下审计日志
 
-- 如果这一节偏 **Agent / ReAct / MCP**：
-  - 在 `service.run()` 中增加多阶段日志
-  - 把 thought / action / observation 结构化输出
-  - 让 controller 直接返回完整执行过程
-
-- 如果这一节偏 **Embedding / Search / Chunking**：
-  - 在 service 中增加预处理、索引、检索等步骤
-  - 返回中间结果，如 score、chunk 数量、过滤结果
-  - 方便你在接口层先把链路看清楚
-
-### 4.2 推荐你至少保留这些字段
-
-建议统一返回：
+### 5.2 审计记录建议
 
 ```js
 {
-  result: {},
-  logs: [],
-  meta: {
-    duration: 0,
-    feature: 'permission',
-    step: 51,
-  }
+  taskId: 'task-001',
+  action: 'write',
+  target: 'src/services/agent.js',
+  decision: 'need_approval',
+  reason: 'write:src/**',
+  timestamp: '2026-04-10T10:00:00Z'
 }
 ```
 
-因为后面你做复杂能力时，日志和 meta 会非常有用。没有这些字段，调试会像摸黑走楼梯，节目效果很强，工程体验很差。
+有了审计记录，后续你才能追溯为什么这个动作没有执行，也才能复盘权限规则是不是太松或太紧。
 
 ---
 
-## 五、如何运行和验证
+## 六、总结
 
-### 5.1 启动项目
+这一节解决的是项目级 Agent 的“边界感”问题。
 
-进入项目目录：
+- 没有权限，Agent 只是会动手的模型
+- 有了权限，Agent 才能进入真实项目
+- 权限不是阻碍效率，而是在风险可控的前提下换来效率
 
-```bash
-cd /Users/jianglin/Desktop/backend/AI-backend
-npm install
-npm run dev
-```
-
-如果启动正常，你应该看到类似输出：
-
-```bash
-🚀 Server ready at http://localhost:3000
-```
-
-> 端口以你的 `.env` / config 实际配置为准。
-
-### 5.2 调接口验证
-
-你可以直接用 curl 或 Apifox / Postman 测试：
-
-```bash
-curl -X POST http://localhost:3000/api/permission   -H 'Content-Type: application/json'   -d '{
-    "input": "test 设置权限控制",
-    "debug": true
-  }'
-```
-
-### 5.3 预期返回
-
-如果最小实现成功，通常会看到这样的结构：
-
-```json
-{
-  "success": true,
-  "message": "设置权限控制 执行成功",
-  "data": {
-    "result": {
-      "ok": true,
-      "feature": "permission"
-    },
-    "logs": [
-      { "stage": "thought", "content": "开始分析任务" },
-      { "stage": "action", "content": "执行 设置权限控制 的核心逻辑" },
-      { "stage": "observation", "content": "设置权限控制 的最小实现已经打通" }
-    ]
-  }
-}
-```
-
-如果你拿不到这个结果，不要急着怀疑模型，先查三件事：
-
-1. `src/routes/index.js` 有没有挂路由
-2. controller 文件名、导入名是否写对
-3. service 有没有正确 export default
-
----
-
-## 六、结合你现有项目，这一节具体应该怎么练
-
-### 6.1 最推荐的练法
-
-不要追求一步到位把这一节做到完美，而是按这个顺序走：
-
-1. **先把最小路由打通**
-2. **再补 service 真逻辑**
-3. **再加日志**
-4. **最后再考虑 validator / schema / function 定义是否下沉**
-
-这是最稳的节奏。先通，再真，再好看。别反过来。
-
-### 6.2 如果你想把这节接进聊天主链路
-
-你现在项目里已经有：
-
-- `chat.routes.js`
-- `chat.controller.js`
-- `ai.service.js`
-- `functionExecutor`
-- `functions/`
-- `schemas/`
-
-所以当本节能力成熟后，可以继续考虑两种接法：
-
-#### 接法一：独立接口
-适合教学和调试，最容易定位问题。
-
-#### 接法二：接入聊天链路
-适合做真正的 Agent / function calling / tool execution。
-
-也就是说，本节先做独立接口是为了学习效率，不是因为它只能独立存在。
-
----
-
-## 七、常见坑
-
-### 7.1 容易写歪的地方
-
-1. **把所有逻辑都写进 controller**  
-   看起来快，后面改起来会很脏。
-
-2. **一上来就改 chat 主链路**  
-   这很容易把调试复杂度拉满。先独立接口，真的省命。
-
-3. **没有日志**  
-   后面做 Agent / Search / Chunk 时，你会不知道是哪一步错了。
-
-4. **没想清楚这一节能力属于哪层**  
-   结果 route、controller、service 三层职责混乱，最后谁都像打零工的。
-
-### 7.2 建议的调试顺序
-
-出了问题，按这个顺序查：
-
-1. 服务有没有启动
-2. 路由有没有注册
-3. controller 有没有被命中
-4. service 是否正常返回结构
-5. 日志里有没有异常栈
-
-这顺序很土，但很有效。别一出错就先怀疑宇宙射线。
-
----
-
-## 八、小结
-
-这一节的关键，不是“我又学了一个新名词”，而是：
-
-- 我知道怎样把 **设置权限控制** 放进一套真实后端工程
-- 我知道 route / controller / service 该怎么配合
-- 我知道怎样用最小接口把能力打通
-- 我知道怎样为后续的 Agent、MCP、Embedding、Chunking 铺路
-
-如果你能按这篇文档真的在 `AI-backend` 里敲完一次，这节才算学到了。
-
-否则就还是那种很熟悉的状态：字都认识，项目不会长。
+下一节我们会把“改了什么”讲清楚，因为有了权限之后，系统还要让人能审查这些改动。那就是 diff 的价值。

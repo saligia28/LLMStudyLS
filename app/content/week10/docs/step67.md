@@ -1,388 +1,219 @@
-# Step 67: 加入元数据（文档名、页码）
+# Step 67: Chunking｜加入元数据（文档名、页码）
 
 ## 学习目标
 
-这一节不再写成“看起来像懂了”的纯讲义，而是直接以你已经实现过的项目 **`/Users/jianglin/Desktop/backend/AI-backend`** 为练习底座，讲清楚 **加入元数据（文档名、页码）** 应该怎么落进一套真实 Node 后端工程里。
+这一节要解决的是：**chunk 不能只会“被检索”，还要能“被解释”**。
 
-做完本节后，你应该能：
+完成后你应该能：
 
-1. 说清楚这项能力该落在哪一层（route / controller / service / adapter / utils）
-2. 在 `AI-backend` 现有目录结构下继续扩展，而不是另起炉灶
-3. 按步骤新增文件、修改入口、跑接口、看日志
-4. 为后续 week 的 Agent / RAG / 工具系统打基础
+1. 设计 chunk 的 metadata 结构
+2. 让文档名、页码、section、段落等信息跟着 chunk 一起存下来
+3. 在检索结果里快速定位来源
+4. 理解 metadata 为什么会直接影响调试、回溯和 rerank
 
-> **本节目标：** 为 chunk 增加元数据。
-
----
-
-## 一、本节内容应该落到你项目的哪里？
-
-你现在这个项目已经不是初学 demo，而是一个分层比较清楚的后端工程：
-
-```
-AI-backend/
-├── src/
-│   ├── routes/
-│   ├── controllers/
-│   ├── services/
-│   ├── adapters/
-│   ├── middleware/
-│   ├── validators/
-│   └── utils/
-├── functions/
-├── schemas/
-└── server.js
-```
-
-所以学这一节时，不要再问“我要不要新建一个 demo 项目”。答案是不需要。你应该直接在这套工程里继续长能力。
-
-### 1.1 本节推荐落点
-
-围绕 **加入元数据（文档名、页码）**，建议这样放：
-
-- **routes**：暴露测试接口
-- **controllers**：解析请求、组织调用
-- **services**：承载核心业务逻辑
-- **utils / functions / schemas**：放辅助工具、函数定义、结构约束
-- **adapters**：如果本节涉及模型提供商差异，再往这里下沉
-
-### 1.2 本节真正要学会什么
-
-不是“我知道这个名词是什么意思”，而是：
-
-- 我知道这项能力为什么属于 service 层
-- 我知道怎样给它补一个测试接口
-- 我知道如何把执行日志暴露出来，方便调试
-- 我知道下一步它如何继续接到更大的 Agent 或 RAG 链路里
+> 如果 chunk 是“最小检索单元”，那 metadata 就是它的身份证。没有身份证，chunk 被召回后你只知道“像是相关”，却不知道“它到底来自哪里、属于哪一段、是不是重复内容”。
 
 ---
 
-## 二、先设计实现方案，再动代码
+## 一、为什么 metadata 这么重要
 
-### 2.1 本节建议新增 / 修改的文件
+Chunk 的 value 不只在文本本身，更在“文本 + 来源信息”。
 
-先不要一上来乱写。建议按下面的文件清单推进：
+### metadata 能解决什么
 
-```
-src/
-├── routes/
-│   └── chunk-meta.routes.js          # 新增：本节练习接口
-├── controllers/
-│   └── chunk-meta.controller.js      # 新增：请求入口
-├── services/
-│   └── chunk-meta.service.js         # 新增：核心逻辑
-├── routes/index.js               # 修改：挂载新路由
-└── app.js / server.js            # 通常无需改动，除非你要挂更多中间件
-```
+1. **可追溯**：回答时能回到原文的具体页码、章节和段落。
+2. **可过滤**：只看某本书、某个文档、某一节的 chunk。
+3. **可调试**：知道是哪个文档源、哪一页、哪一段出了问题。
+4. **可去重**：当多个 chunk 内容很像时，metadata 帮你判断它们是不是同源重复。
+5. **可评价**：实验时可以按文档维度统计召回情况。
 
-如果本节涉及工具定义或函数调用，还可以继续扩：
+### 一个典型的 metadata 结构
 
-```
-functions/
-└── chunk-meta.js
-
-schemas/
-└── chunk-meta.schema.js
-```
-
-### 2.2 设计原则
-
-这一节建议坚持 4 个原则：
-
-1. **核心逻辑放 service**，不要塞进 controller
-2. **controller 只做请求协调**，不做复杂业务判断
-3. **route 只负责路径和中间件**，别把逻辑写成一锅粥
-4. **先打通最小闭环，再考虑抽象与复用**
-
-这四条很朴素，但很值钱。你后面做 Agent、MCP、RAG 时，能不能不写成事故现场，基本就看它们。
+| 字段 | 作用 |
+| --- | --- |
+| `docName` | 文档名，最基本的来源标识 |
+| `docId` | 文档唯一 ID，适合系统内部引用 |
+| `page` | 页码，尤其适合 PDF / 扫描文档 |
+| `section` | 所属章节标题 |
+| `paragraphIndex` | 在章节内的段落顺序 |
+| `chunkIndex` | 当前文档中的 chunk 顺序 |
+| `startOffset` / `endOffset` | 原文位置，便于精确回放 |
+| `sourceType` | markdown / pdf / html / code |
+| `tokenCount` | 方便做成本和实验统计 |
 
 ---
 
-## 三、代码实操：在 AI-backend 里把这节能力接进去
+## 二、metadata 不是越多越好
 
-### 3.1 第一步：先写 service
+metadata 的目标是“够用且稳定”，不是把所有信息都塞进去。
 
-创建文件：`src/services/chunk-meta.service.js`
+### 推荐原则
+
+1. **稳定优先**：优先存不会轻易变的字段，比如文档名、页码、章节。
+2. **检索优先**：优先存后面检索、过滤、回放会用到的字段。
+3. **调试优先**：优先存能帮助你定位问题的字段。
+
+### 一个实用模板
 
 ```js
-import logger from '../utils/logger.js'
-
-class ChunkMetaService {
-  async run(payload = {}) {
-    const startTime = Date.now()
-    const logs = []
-
-    logs.push({ stage: 'thought', content: '开始分析任务' })
-    logs.push({ stage: 'action', content: '执行 加入元数据（文档名、页码） 的核心逻辑' })
-
-    const result = {
-      ok: true,
-      feature: 'chunk-meta',
-      payload,
-      summary: '加入元数据（文档名、页码） 的最小实现已经打通',
-      completedAt: new Date().toISOString(),
-    }
-
-    logs.push({ stage: 'observation', content: result.summary })
-
-    logger.info('chunk-meta service completed', {
-      duration: Date.now() - startTime,
-    })
-
-    return { result, logs }
+function buildChunkMetadata({
+  docId,
+  docName,
+  page,
+  sectionPath = [],
+  paragraphIndex,
+  chunkIndex,
+  tokenCount,
+  startOffset,
+  endOffset,
+}) {
+  return {
+    docId,
+    docName,
+    page,
+    sectionPath,
+    paragraphIndex,
+    chunkIndex,
+    tokenCount,
+    span: { startOffset, endOffset },
   }
 }
-
-export default new ChunkMetaService()
 ```
 
-这一步的目标很简单：**先把输入、执行、结果、日志结构立起来**。
+这个结构有两个好处：
 
-你别嫌它朴素。真正值钱的是这个骨架，因为后面你只需要不断把“假动作”替换成“真逻辑”。
-
-### 3.2 第二步：补 controller
-
-创建文件：`src/controllers/chunk-meta.controller.js`
-
-```js
-import { success } from '../utils/response.js'
-import chunkMetaService from '../services/chunk-meta.service.js'
-
-class ChunkMetaController {
-  async run(req, res) {
-    const data = await chunkMetaService.run(req.body)
-    return res.json(success(data, '加入元数据（文档名、页码） 执行成功'))
-  }
-}
-
-export default new ChunkMetaController()
-```
-
-为什么这一层要单独保留？因为后面你大概率会在这里做：
-
-- 参数校验结果接入
-- 请求上下文拼装
-- 用户身份 / 权限信息透传
-- 返回结构格式化
-
-如果你一上来全糊进 route，后面很快就会开始骂昨天的自己。
-
-### 3.3 第三步：补 route
-
-创建文件：`src/routes/chunk-meta.routes.js`
-
-```js
-import express from 'express'
-import chunkMetaController from '../controllers/chunk-meta.controller.js'
-import { asyncHandler } from '../utils/asyncHandler.js'
-
-const router = express.Router()
-
-router.post('/chunk-meta', asyncHandler(chunkMetaController.run.bind(chunkMetaController)))
-
-export default router
-```
-
-### 3.4 第四步：挂到总路由
-
-修改文件：`src/routes/index.js`
-
-在顶部新增：
-
-```js
-import chunkmetaRoutes from './chunk-meta.routes.js'
-```
-
-在路由挂载区新增：
-
-```js
-router.use('/', chunkmetaRoutes)
-```
-
-这样本节接口就会进入统一 `/api` 前缀下。
-
-最终你可以通过下面地址访问：
-
-```
-POST /api/chunk-meta
-```
+- `sectionPath` 可以表示多级标题，比如 `Week10 > Step67 > 元数据设计`
+- `span` 可以以后直接回到原文位置，不需要重新猜
 
 ---
 
-## 四、这节能力该怎么“写真”
+## 三、如何给 chunk 注入 metadata
 
-上面的代码只是最小骨架。真正练手时，你应该把本节主题替换进来。
+最稳妥的方式，是在切分时一起构建。
 
-### 4.1 围绕“加入元数据（文档名、页码）”的真实实现方向
+```js
+function attachMetadata(chunks, baseMeta) {
+  return chunks.map((chunk, index) => ({
+    id: `${baseMeta.docId}-${index + 1}`,
+    text: chunk.text,
+    tokenCount: chunk.tokenCount,
+    metadata: buildChunkMetadata({
+      ...baseMeta,
+      chunkIndex: index + 1,
+      tokenCount: chunk.tokenCount,
+      startOffset: chunk.startOffset,
+      endOffset: chunk.endOffset,
+    }),
+  }))
+}
+```
 
-你可以按下面方式升级当前 service：
+### 一个示例输入
 
-- 如果这一节偏 **Agent / ReAct / MCP**：
-  - 在 `service.run()` 中增加多阶段日志
-  - 把 thought / action / observation 结构化输出
-  - 让 controller 直接返回完整执行过程
+```js
+const baseMeta = {
+  docId: 'chunking-guide-001',
+  docName: 'week10-chunking.md',
+  page: 12,
+  sectionPath: ['Chunking', 'Metadata'],
+  paragraphIndex: 3,
+}
+```
 
-- 如果这一节偏 **Embedding / Search / Chunking**：
-  - 在 service 中增加预处理、索引、检索等步骤
-  - 返回中间结果，如 score、chunk 数量、过滤结果
-  - 方便你在接口层先把链路看清楚
-
-### 4.2 推荐你至少保留这些字段
-
-建议统一返回：
+### 一个示例输出
 
 ```js
 {
-  result: {},
-  logs: [],
-  meta: {
-    duration: 0,
-    feature: 'chunk-meta',
-    step: 67,
+  id: 'chunking-guide-001-4',
+  text: '...chunk 文本...',
+  tokenCount: 386,
+  metadata: {
+    docId: 'chunking-guide-001',
+    docName: 'week10-chunking.md',
+    page: 12,
+    sectionPath: ['Chunking', 'Metadata'],
+    paragraphIndex: 3,
+    chunkIndex: 4,
+    tokenCount: 386,
+    span: { startOffset: 8120, endOffset: 9648 }
   }
 }
 ```
 
-因为后面你做复杂能力时，日志和 meta 会非常有用。没有这些字段，调试会像摸黑走楼梯，节目效果很强，工程体验很差。
-
 ---
 
-## 五、如何运行和验证
+## 四、metadata 如何影响检索
 
-### 5.1 启动项目
+检索不只是“相似度最高就行”，还常常需要“先筛再排”。
 
-进入项目目录：
+### 1. 过滤
 
-```bash
-cd /Users/jianglin/Desktop/backend/AI-backend
-npm install
-npm run dev
-```
+比如你只想在某一本手册里找答案，可以先按 `docId` 或 `docName` 过滤。
 
-如果启动正常，你应该看到类似输出：
-
-```bash
-🚀 Server ready at http://localhost:3000
-```
-
-> 端口以你的 `.env` / config 实际配置为准。
-
-### 5.2 调接口验证
-
-你可以直接用 curl 或 Apifox / Postman 测试：
-
-```bash
-curl -X POST http://localhost:3000/api/chunk-meta   -H 'Content-Type: application/json'   -d '{
-    "input": "test 加入元数据（文档名、页码）",
-    "debug": true
-  }'
-```
-
-### 5.3 预期返回
-
-如果最小实现成功，通常会看到这样的结构：
-
-```json
-{
-  "success": true,
-  "message": "加入元数据（文档名、页码） 执行成功",
-  "data": {
-    "result": {
-      "ok": true,
-      "feature": "chunk-meta"
-    },
-    "logs": [
-      { "stage": "thought", "content": "开始分析任务" },
-      { "stage": "action", "content": "执行 加入元数据（文档名、页码） 的核心逻辑" },
-      { "stage": "observation", "content": "加入元数据（文档名、页码） 的最小实现已经打通" }
-    ]
-  }
+```js
+function filterByDoc(chunks, docId) {
+  return chunks.filter(chunk => chunk.metadata.docId === docId)
 }
 ```
 
-如果你拿不到这个结果，不要急着怀疑模型，先查三件事：
+### 2. 排序与去重
 
-1. `src/routes/index.js` 有没有挂路由
-2. controller 文件名、导入名是否写对
-3. service 有没有正确 export default
+如果两个 chunk 来自同一页同一段，且文本高度相似，就可以在 rerank 前先去掉一个。
 
----
+```js
+function dedupeBySource(chunks) {
+  const seen = new Set()
+  const result = []
 
-## 六、结合你现有项目，这一节具体应该怎么练
+  for (const chunk of chunks) {
+    const key = `${chunk.metadata.docId}:${chunk.metadata.page}:${chunk.metadata.chunkIndex}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    result.push(chunk)
+  }
 
-### 6.1 最推荐的练法
+  return result
+}
+```
 
-不要追求一步到位把这一节做到完美，而是按这个顺序走：
+### 3. 回溯
 
-1. **先把最小路由打通**
-2. **再补 service 真逻辑**
-3. **再加日志**
-4. **最后再考虑 validator / schema / function 定义是否下沉**
+当 LLM 回答“这条结论来自哪里”时，metadata 可以直接给你：
 
-这是最稳的节奏。先通，再真，再好看。别反过来。
+- 来自哪本资料
+- 第几页
+- 哪个 section
+- 哪个 chunk
 
-### 6.2 如果你想把这节接进聊天主链路
-
-你现在项目里已经有：
-
-- `chat.routes.js`
-- `chat.controller.js`
-- `ai.service.js`
-- `functionExecutor`
-- `functions/`
-- `schemas/`
-
-所以当本节能力成熟后，可以继续考虑两种接法：
-
-#### 接法一：独立接口
-适合教学和调试，最容易定位问题。
-
-#### 接法二：接入聊天链路
-适合做真正的 Agent / function calling / tool execution。
-
-也就是说，本节先做独立接口是为了学习效率，不是因为它只能独立存在。
+这比让模型自己猜来源可靠得多。
 
 ---
 
-## 七、常见坑
+## 五、metadata 和 chunk 质量是互相配合的
 
-### 7.1 容易写歪的地方
+metadata 不是 chunking 的附属品，而是 chunking 设计的一部分。
 
-1. **把所有逻辑都写进 controller**  
-   看起来快，后面改起来会很脏。
+### 一个常见误区
 
-2. **一上来就改 chat 主链路**  
-   这很容易把调试复杂度拉满。先独立接口，真的省命。
+只切文本，不设计 metadata，最后会出现：
 
-3. **没有日志**  
-   后面做 Agent / Search / Chunk 时，你会不知道是哪一步错了。
+- 检索到很多看起来相关的 chunk
+- 却不知道它们是否来自同一部分
+- 回答时无法引用来源
+- 调试时无法复现实验结果
 
-4. **没想清楚这一节能力属于哪层**  
-   结果 route、controller、service 三层职责混乱，最后谁都像打零工的。
+### 更好的做法
 
-### 7.2 建议的调试顺序
-
-出了问题，按这个顺序查：
-
-1. 服务有没有启动
-2. 路由有没有注册
-3. controller 有没有被命中
-4. service 是否正常返回结构
-5. 日志里有没有异常栈
-
-这顺序很土，但很有效。别一出错就先怀疑宇宙射线。
+```text
+切分策略负责“内容是否完整”
+metadata 负责“来源是否清楚”
+两者一起，chunk 才能进入可用状态
+```
 
 ---
 
-## 八、小结
+## 六、小结
 
-这一节的关键，不是“我又学了一个新名词”，而是：
+Chunking 的最终目标不是做出“很多块文本”，而是做出“每一块都能被解释、过滤、回放、评价”的检索单元。
 
-- 我知道怎样把 **加入元数据（文档名、页码）** 放进一套真实后端工程
-- 我知道 route / controller / service 该怎么配合
-- 我知道怎样用最小接口把能力打通
-- 我知道怎样为后续的 Agent、MCP、Embedding、Chunking 铺路
-
-如果你能按这篇文档真的在 `AI-backend` 里敲完一次，这节才算学到了。
-
-否则就还是那种很熟悉的状态：字都认识，项目不会长。
+如果说 Step 66 解决的是“怎么切”，那么 Step 67 解决的就是“切完之后，怎么让这些块不再匿名”。
