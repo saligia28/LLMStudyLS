@@ -1,0 +1,78 @@
+{
+  "id": "week15",
+  "title": "Week 15: 模型量化",
+  "description": "从量化原理（int8/int4/GPTQ/AWQ）到量化实验、速度与精度评估、多模型对比、动态切换，系统掌握大模型量化的工程实践。",
+  "order": 15,
+  "steps": [
+    {
+      "id": "step99",
+      "order": 99,
+      "title": "学习量化（int8 / int4 / GPTQ）",
+      "description": "理解大模型量化的基本原理，从 FP32 到 int8/int4 的精度压缩路径，掌握 GPTQ、AWQ、GGUF 等主流量化方法及其适用场景。",
+      "docFile": "step99.md",
+      "codeDir": "quantization-basics",
+      "canManual": false,
+      "tags": ["量化", "int8", "GPTQ", "AWQ", "GGUF"]
+    },
+    {
+      "id": "step100",
+      "order": 100,
+      "title": "做一次量化实验",
+      "description": "使用 bitsandbytes 对小型开源模型进行 int8/int4 量化，或加载预量化 GPTQ 模型，在相同 Prompt 下对比 fp16、int8、int4 的推理结果。",
+      "docFile": "step100.md",
+      "codeDir": "quantization-experiment",
+      "canManual": false,
+      "tags": ["bitsandbytes", "实验", "int4", "int8"]
+    },
+    {
+      "id": "step101",
+      "order": 101,
+      "title": "评估速度与损失",
+      "description": "设计推理速度（tokens/s）与质量（困惑度 PPL、ROUGE）的评估框架，对比不同量化精度的效率与精度曲线，找到工程甜点。",
+      "docFile": "step101.md",
+      "codeDir": "quantization-eval",
+      "canManual": false,
+      "tags": ["评估", "PPL", "ROUGE", "速度"]
+    },
+    {
+      "id": "step102",
+      "order": 102,
+      "title": "测试不同量化模型",
+      "description": "通过 Ollama 拉取不同量化精度的 GGUF 模型（q4_K_M、q5_K_M、q8_0），在事实问答、代码生成、中文表达等维度做横向对比。",
+      "docFile": "step102.md",
+      "codeDir": "quantization-comparison",
+      "canManual": false,
+      "tags": ["Ollama", "GGUF", "q4_K_M", "对比"]
+    },
+    {
+      "id": "step103",
+      "order": 103,
+      "title": "加入量化模型切换",
+      "description": "在 Node.js 后端设计模型适配器工厂，支持 DeepSeek API、Ollama 本地模型、vLLM 服务的运行时切换，并实现降级 fallback 策略。",
+      "docFile": "step103.md",
+      "codeDir": "model-switcher",
+      "canManual": false,
+      "tags": ["模型切换", "适配器", "Fallback", "Node.js"]
+    },
+    {
+      "id": "step104",
+      "order": 104,
+      "title": "写一份性能报告",
+      "description": "掌握 AI 推理性能报告的结构与写法，撰写一份涵盖延迟、吞吐量、质量、成本、资源占用的完整对比报告。",
+      "docFile": "step104.md",
+      "codeDir": "performance-report",
+      "canManual": false,
+      "tags": ["性能报告", "延迟", "吞吐量", "成本"]
+    },
+    {
+      "id": "step105",
+      "order": 105,
+      "title": "整理专题",
+      "description": "回顾 Week 11-15 完整学习路径，梳理 RAG Pipeline、应用落地、Ollama、vLLM、量化的技术演进，形成可复用的决策树与技术全景图。",
+      "docFile": "step105.md",
+      "codeDir": "summary",
+      "canManual": false,
+      "tags": ["总结", "专题", "架构", "决策树"]
+    }
+  ]
+}

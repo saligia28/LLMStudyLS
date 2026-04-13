@@ -1,0 +1,78 @@
+{
+  "id": "week14",
+  "title": "Week 14: vLLM 高性能推理",
+  "description": "学习 vLLM 的核心技术（PagedAttention、连续批处理），掌握 vLLM API 服务的部署与调优，并与 Ollama 做系统对比，最终接入前端 chat 应用。",
+  "order": 14,
+  "steps": [
+    {
+      "id": "step92",
+      "order": 92,
+      "title": "安装 vLLM",
+      "description": "了解 vLLM 的定位与架构优势，完成 GPU 环境准备，通过 pip 或 Docker 安装 vLLM 并进行冒烟验证。",
+      "docFile": "step92.md",
+      "codeDir": "vllm-setup",
+      "canManual": false,
+      "tags": ["vLLM", "安装", "推理"]
+    },
+    {
+      "id": "step93",
+      "order": 93,
+      "title": "加载一个 7B 模型",
+      "description": "使用 vLLM 的 Python LLM 类加载 7B 参数量模型，掌握显存预算、采样参数设置与批量推理方法。",
+      "docFile": "step93.md",
+      "codeDir": "load-7b",
+      "canManual": false,
+      "tags": ["vLLM", "7B", "推理", "HuggingFace"]
+    },
+    {
+      "id": "step94",
+      "order": 94,
+      "title": "研究 tensor parallel / paged attention",
+      "description": "深入理解 PagedAttention 的 KV cache 分页机制与连续批处理原理，掌握多卡 Tensor Parallelism 配置。",
+      "docFile": "step94.md",
+      "codeDir": "tp-pa-study",
+      "canManual": false,
+      "tags": ["PagedAttention", "TensorParallel", "性能"]
+    },
+    {
+      "id": "step95",
+      "order": 95,
+      "title": "实现 vLLM API 服务器",
+      "description": "启动 OpenAI 兼容的 vLLM API 服务，使用 curl、Python SDK 和 Node.js 客户端进行测试，掌握流式输出与生产部署要点。",
+      "docFile": "step95.md",
+      "codeDir": "vllm-api-server",
+      "canManual": false,
+      "tags": ["vLLM", "API", "服务器", "OpenAI兼容"]
+    },
+    {
+      "id": "step96",
+      "order": 96,
+      "title": "对比 Ollama 与 vLLM",
+      "description": "从部署复杂度、吞吐量、延迟、显存占用、API 兼容性等维度系统对比 Ollama 与 vLLM，给出选型建议。",
+      "docFile": "step96.md",
+      "codeDir": "ollama-vs-vllm",
+      "canManual": false,
+      "tags": ["Ollama", "vLLM", "对比", "选型"]
+    },
+    {
+      "id": "step97",
+      "order": 97,
+      "title": "接入你的 chat 前端",
+      "description": "修改 Express 后端将 LLM 请求路由至本地 vLLM 服务，实现 DeepSeek / Ollama / vLLM 的无缝切换，完成端到端流式验证。",
+      "docFile": "step97.md",
+      "codeDir": "chat-frontend-integration",
+      "canManual": false,
+      "tags": ["前端接入", "Express", "流式", "适配器"]
+    },
+    {
+      "id": "step98",
+      "order": 98,
+      "title": "写性能分析结论",
+      "description": "学习如何撰写规范的推理性能分析报告，涵盖 TTFT、吞吐量、p99 延迟、GPU 利用率及成本分析，最终给出推理策略决策框架。",
+      "docFile": "step98.md",
+      "codeDir": "perf-analysis",
+      "canManual": false,
+      "tags": ["性能分析", "报告", "决策框架", "成本"]
+    }
+  ]
+}

@@ -1,0 +1,78 @@
+{
+  "id": "week11",
+  "title": "Week 11: RAG Pipeline",
+  "description": "整合 chunk、embedding、向量存储与检索，构建端到端的 RAG 流水线，逐步加入 rerank、query 重写、来源引用与缓存策略。",
+  "order": 11,
+  "steps": [
+    {
+      "id": "step71",
+      "order": 71,
+      "title": "整合 Pipeline（chunk → embed → store → search）",
+      "description": "将 chunk、embedding、向量存储与检索整合为一个可复用的 RagPipeline 类，理解 ingest 与 query 两条主干流程。",
+      "docFile": "step71.md",
+      "codeDir": "rag-pipeline",
+      "canManual": false,
+      "tags": ["RAG", "Pipeline", "整合"]
+    },
+    {
+      "id": "step72",
+      "order": 72,
+      "title": "加入 rerank（可选）",
+      "description": "理解向量相似度与语义相关性之间的差距，实现基于 LLM 评分的轻量 reranker，提升检索结果的排序质量。",
+      "docFile": "step72.md",
+      "codeDir": "rag-rerank",
+      "canManual": false,
+      "tags": ["Rerank", "排序", "相关性"]
+    },
+    {
+      "id": "step73",
+      "order": 73,
+      "title": "添加 query 重写（retrieval-augmented）",
+      "description": "用 LLM 对用户原始问题进行扩写与重写，并探索 HyDE 策略，提升模糊问题的召回率。",
+      "docFile": "step73.md",
+      "codeDir": "query-rewrite",
+      "canManual": false,
+      "tags": ["Query", "重写", "HyDE"]
+    },
+    {
+      "id": "step74",
+      "order": 74,
+      "title": "加入来源引用",
+      "description": "通过 chunk metadata 追踪来源，在 LLM 回答中注入引用信息，并从最终答案中提取和展示引用列表。",
+      "docFile": "step74.md",
+      "codeDir": "source-citation",
+      "canManual": false,
+      "tags": ["引用", "Metadata", "来源"]
+    },
+    {
+      "id": "step75",
+      "order": 75,
+      "title": "测试不同问答",
+      "description": "设计 RAG 测试套件，实现问答评估循环，并初步理解 precision、recall 与 faithfulness 指标。",
+      "docFile": "step75.md",
+      "codeDir": "rag-eval",
+      "canManual": false,
+      "tags": ["测试", "评估", "指标"]
+    },
+    {
+      "id": "step76",
+      "order": 76,
+      "title": "加入缓存策略",
+      "description": "为 embedding 和检索结果加入内存与文件级缓存，并实现基于语义相似度的查询去重，降低 API 调用成本。",
+      "docFile": "step76.md",
+      "codeDir": "rag-cache",
+      "canManual": false,
+      "tags": ["缓存", "性能", "去重"]
+    },
+    {
+      "id": "step77",
+      "order": 77,
+      "title": "整理 Pipeline 文档",
+      "description": "总结完整 RAG Pipeline 的架构、最佳实践、常见问题与扩展方向，形成可交付的技术文档。",
+      "docFile": "step77.md",
+      "codeDir": "pipeline-docs",
+      "canManual": false,
+      "tags": ["总结", "架构", "文档"]
+    }
+  ]
+}

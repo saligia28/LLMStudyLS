@@ -23,6 +23,46 @@
     {
       "id": "week5",
       "enabled": true
+    },
+    {
+      "id": "week6",
+      "enabled": true
+    },
+    {
+      "id": "week7",
+      "enabled": true
+    },
+    {
+      "id": "week8",
+      "enabled": true
+    },
+    {
+      "id": "week9",
+      "enabled": true
+    },
+    {
+      "id": "week10",
+      "enabled": true
+    },
+    {
+      "id": "week11",
+      "enabled": true
+    },
+    {
+      "id": "week12",
+      "enabled": true
+    },
+    {
+      "id": "week13",
+      "enabled": true
+    },
+    {
+      "id": "week14",
+      "enabled": true
+    },
+    {
+      "id": "week15",
+      "enabled": true
     }
   ]
 }

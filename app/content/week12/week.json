@@ -1,0 +1,78 @@
+{
+  "id": "week12",
+  "title": "Week 12: 应用落地",
+  "description": "将 RAG Pipeline 封装成完整的 web 应用，从文件上传界面、后端处理到前端问答与来源展示，逐步构建一个可交付的文档问答小产品。",
+  "order": 12,
+  "steps": [
+    {
+      "id": "step78",
+      "order": 78,
+      "title": "构建上传文档界面",
+      "description": "设计并实现前端文档上传 UI，支持拖拽、进度展示与上传状态反馈。",
+      "docFile": "step78.md",
+      "codeDir": "upload-ui",
+      "canManual": false,
+      "tags": ["前端", "上传", "UI"]
+    },
+    {
+      "id": "step79",
+      "order": 79,
+      "title": "后端接收文件 → chunk",
+      "description": "使用 multer 接收上传文件，读取内容并应用 chunking 工具，返回 chunk 预览给前端。",
+      "docFile": "step79.md",
+      "codeDir": "upload-chunk",
+      "canManual": false,
+      "tags": ["后端", "multer", "Chunk"]
+    },
+    {
+      "id": "step80",
+      "order": 80,
+      "title": "加入 embedding 存储",
+      "description": "将 chunking 输出接入 embedding pipeline，存储向量索引，并在文件变更时支持重建索引。",
+      "docFile": "step80.md",
+      "codeDir": "embed-store",
+      "canManual": false,
+      "tags": ["Embedding", "存储", "索引"]
+    },
+    {
+      "id": "step81",
+      "order": 81,
+      "title": "加入前端问答框",
+      "description": "构建聊天输入 UI，通过 SSE 实现流式回答展示，并管理对话历史与加载状态。",
+      "docFile": "step81.md",
+      "codeDir": "qa-frontend",
+      "canManual": false,
+      "tags": ["前端", "问答", "SSE"]
+    },
+    {
+      "id": "step82",
+      "order": 82,
+      "title": "实现带引用回答",
+      "description": "在 RAG 回答中附加来源 chunk 引用，前端渲染引用块并支持追溯原文。",
+      "docFile": "step82.md",
+      "codeDir": "cited-answer",
+      "canManual": false,
+      "tags": ["引用", "RAG", "来源"]
+    },
+    {
+      "id": "step83",
+      "order": 83,
+      "title": "打包成 web 小产品",
+      "description": "梳理完整应用架构，加入环境变量配置、健康检查与 npm 脚本，使产品可一键部署。",
+      "docFile": "step83.md",
+      "codeDir": "packaging",
+      "canManual": false,
+      "tags": ["打包", "部署", "配置"]
+    },
+    {
+      "id": "step84",
+      "order": 84,
+      "title": "写产品 README",
+      "description": "学习如何写一份高质量技术 README，并为文档问答产品写出完整的说明文档。",
+      "docFile": "step84.md",
+      "codeDir": "readme-writing",
+      "canManual": false,
+      "tags": ["README", "文档", "交付"]
+    }
+  ]
+}

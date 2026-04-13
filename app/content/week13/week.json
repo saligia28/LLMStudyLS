@@ -1,0 +1,78 @@
+{
+  "id": "week13",
+  "title": "Week 13: Ollama 入门",
+  "description": "在本地使用 Ollama 运行开源模型，从安装配置、API 调用、流式输出到多模型对比与性能测试，建立本地 LLM 的完整使用链路。",
+  "order": 13,
+  "steps": [
+    {
+      "id": "step85",
+      "order": 85,
+      "title": "安装 Ollama",
+      "description": "了解 Ollama 的定位与架构，完成 Mac/Linux/Windows 三平台安装，掌握 daemon 管理与基本 CLI 操作，完成第一次模型拉取。",
+      "docFile": "step85.md",
+      "codeDir": "ollama-setup",
+      "canManual": false,
+      "tags": ["Ollama", "安装", "本地模型"]
+    },
+    {
+      "id": "step86",
+      "order": 86,
+      "title": "运行 llama3 / qwen2 模型",
+      "description": "拉取并运行 llama3:8b 与 qwen2:7b，在终端中交互对话，理解 GGUF 格式与模型卡片，对比两个模型在中文任务上的表现。",
+      "docFile": "step86.md",
+      "codeDir": "ollama-models",
+      "canManual": false,
+      "tags": ["llama3", "qwen2", "GGUF", "模型对比"]
+    },
+    {
+      "id": "step87",
+      "order": 87,
+      "title": "写一个 Ollama 请求脚本",
+      "description": "熟悉 Ollama REST API（端口 11434），用 Node.js fetch 调用 /api/chat 与 /api/generate，并实现一个兼容 OpenAI 格式的适配器。",
+      "docFile": "step87.md",
+      "codeDir": "ollama-client",
+      "canManual": false,
+      "tags": ["REST API", "Node.js", "fetch", "适配器"]
+    },
+    {
+      "id": "step88",
+      "order": 88,
+      "title": "加入 stream 输出",
+      "description": "理解 Ollama 的换行分隔 JSON 流格式，用 Node.js 实现逐 token 输出，构建一个完整的 CLI 流式对话循环，并处理流取消与错误。",
+      "docFile": "step88.md",
+      "codeDir": "ollama-stream",
+      "canManual": false,
+      "tags": ["streaming", "NDJSON", "async iterator"]
+    },
+    {
+      "id": "step89",
+      "order": 89,
+      "title": "测试不同模型大小差异",
+      "description": "拉取 1B、3B、8B 三个尺寸的模型，设计统一测试题组，对比回答质量、推理速度与内存占用，理解参数量与实际效果的权衡。",
+      "docFile": "step89.md",
+      "codeDir": "model-comparison",
+      "canManual": false,
+      "tags": ["模型尺寸", "benchmark", "对比测试"]
+    },
+    {
+      "id": "step90",
+      "order": 90,
+      "title": "做一次性能测试",
+      "description": "定义 TTFT、吞吐量、延迟等核心指标，用 Node.js 编写基准测试脚本，分析 prompt 长度与并发对性能的影响，理解 CPU/GPU 与量化的关系。",
+      "docFile": "step90.md",
+      "codeDir": "perf-benchmark",
+      "canManual": false,
+      "tags": ["性能测试", "TTFT", "吞吐量", "量化"]
+    },
+    {
+      "id": "step91",
+      "order": 91,
+      "title": "整理笔记",
+      "description": "全面总结 Ollama 的能力边界，对比 Ollama / OpenAI API / vLLM 的适用场景，理解 Modelfile 自定义机制，并预览 Week 14 的 vLLM 生产级推理。",
+      "docFile": "step91.md",
+      "codeDir": "week13-summary",
+      "canManual": false,
+      "tags": ["总结", "Modelfile", "vLLM", "对比"]
+    }
+  ]
+}
