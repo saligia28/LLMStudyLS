@@ -1,641 +1,464 @@
-# Step 33: Function Calling｜多层验证策略 - Joi 与 Zod
+# Step 33: Function Calling｜实现 Function 执行循环
 
 ## 学习目标
 
-这个任务的本质是回答一个核心问题:**如何在企业级应用中实现多层次的参数验证,确保从 HTTP 请求到函数执行的全链路类型安全**。
+这一节要解决一个真实的工程问题：**AI 调用函数之后，还想继续调用另一个函数，怎么办？**
 
-通过本教程,你将:
+以及一个更隐蔽的问题：**流式（stream）模式下，Function Calling 的参数是逐 token 输出的，该怎么处理？**
 
-1. 理解 AI-backend 的多层验证架构
-2. 掌握 Joi 在 HTTP 层的验证实践
-3. 学习 Zod 在函数层的类型安全
-4. 实现三层防御体系:HTTP → Function → Schema
+完成后你应该能：
 
-> **实战项目**: 本教程基于 AI-backend 的实际验证架构,展示生产级的验证策略。
+1. 把 `if (result.function_call)` 改成正确的 `while` 循环，支持 AI 连续调用多个函数
+2. 理解 stream 模式和普通模式在 Function Calling 处理上的本质差异
+3. 给 `chatStream` 补上 Function Calling 支持
+4. 加入循环次数限制，防止 AI 陷入无限调用
 
----
-
-## 一、AI-backend 的多层验证架构
-
-### 1.1 为什么需要多层验证?
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│       AI-backend 的三层验证防御体系                            │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│   Layer 1: HTTP 层验证 (Joi)                                 │
-│   ┌─────────────────────────────────────────────────┐       │
-│   │  Controller → Validator (chatValidator.js)     │       │
-│   │  目标: 验证 HTTP 请求的结构和基本类型              │       │
-│   │  工具: Joi                                      │       │
-│   │                                                 │       │
-│   │  const chatRequestSchema = Joi.object({        │       │
-│   │    messages: Joi.array().items(messageSchema)  │       │
-│   │      .min(1).max(50).required(),               │       │
-│   │    provider: Joi.string()                      │       │
-│   │      .valid('deepseek','openai').optional(),   │       │
-│   │    functions: Joi.array()                      │       │
-│   │      .items(functionSchema).optional()         │       │
-│   │  })                                            │       │
-│   │                                                 │       │
-│   │  防御:                                          │       │
-│   │  • 恶意请求体(超长、格式错误)                    │       │
-│   │  • 无效的 provider 参数                         │       │
-│   │  • 超出限制的 messages 数量                     │       │
-│   └─────────────────────────────────────────────────┘       │
-│         ↓ 通过验证后                                         │
-│   Layer 2: 业务逻辑验证                                       │
-│   ┌─────────────────────────────────────────────────┐       │
-│   │  Service → Function Executor                   │       │
-│   │  目标: 验证业务规则和函数参数                     │       │
-│   │                                                 │       │
-│   │  防御:                                          │       │
-│   │  • 函数名不存在                                  │       │
-│   │  • arguments 不是有效 JSON                      │       │
-│   │  • 业务规则冲突                                  │       │
-│   └─────────────────────────────────────────────────┘       │
-│         ↓ 通过验证后                                         │
-│   Layer 3: 函数层验证 (Zod)                                  │
-│   ┌─────────────────────────────────────────────────┐       │
-│   │  Functions (getTime.js, sum.js)                │       │
-│   │  目标: 严格的类型检查和值约束                     │       │
-│   │  工具: 手动验证 或 Zod                           │       │
-│   │                                                 │       │
-│   │  const SumParamsSchema = z.object({            │       │
-│   │    a: z.number(),                              │       │
-│   │    b: z.number()                               │       │
-│   │  })                                            │       │
-│   │                                                 │       │
-│   │  防御:                                          │       │
-│   │  • AI 传递的类型错误("10" vs 10)                │       │
-│   │  • 值超出有效范围                                │       │
-│   │  • 业务逻辑约束(如负数、NaN)                     │       │
-│   └─────────────────────────────────────────────────┘       │
-│                                                             │
-│   为什么需要三层?                                            │
-│   • Layer 1 快速拦截恶意请求,保护服务器                      │
-│   • Layer 2 确保业务逻辑正确                                 │
-│   • Layer 3 保证函数内部类型安全,防止 AI 传错参数            │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### 1.2 Joi vs Zod: 选择合适的工具
-
-| 维度 | Joi | Zod | AI-backend 的选择 |
-|------|-----|-----|------------------|
-| **使用场景** | HTTP 请求验证 | 函数参数/返回值验证 | Joi 在 HTTP 层,Zod 在函数层 |
-| **类型推断** | 不支持 TypeScript 推断 | 原生支持 `z.infer<>` | Zod 更适合 TypeScript 项目 |
-| **错误信息** | 详细,适合返回给客户端 | 简洁,适合内部验证 | Joi 错误给用户,Zod 错误记日志 |
-| **性能** | 稍慢 | 更快 | 关键路径用 Zod |
-| **生态** | Express 生态成熟 | 新兴,社区活跃 | 两者结合使用 |
+> **当前项目状态**：`chat.controller.js` 里用的是 `if`，只处理一次函数调用。`chatStream` 完全没有 function calling 逻辑。本节把这两处都补全。
 
 ---
 
-## 二、Layer 1: HTTP 层的 Joi 验证
+## 一、为什么 `if` 不够用
 
-### 2.1 AI-backend 的实际实现
+### 1.1 当前实现的局限
 
-**文件路径**: `/Users/jianglin/Desktop/backend/AI-backend/src/validators/chatValidator.js`
+打开 `src/controllers/chat.controller.js`，你会看到：
 
-```javascript
-import Joi from 'joi'
-import { BadRequestError } from '../errors/index.js'
-
-// 消息 Schema
-const messageSchema = Joi.object({
-  role: Joi.string().valid('system', 'user', 'assistant', 'function').required(),
-  content: Joi.string().max(10000).allow(null),
-  name: Joi.string().optional(),        // function role 需要
-  function_call: Joi.object().optional(), // assistant 带函数调用时
-})
-
-// Function Schema (用于验证 functions 参数)
-const functionSchema = Joi.object({
-  name: Joi.string().required(),
-  description: Joi.string().required(),
-  parameters: Joi.object().required(),
-})
-
-// 聊天请求 Schema
-const chatRequestSchema = Joi.object({
-  messages: Joi.array().items(messageSchema).min(1).max(50).required(),
-  provider: Joi.string().valid('deepseek', 'openai', 'claude').optional(),
-  model: Joi.string().optional(),
-  temperature: Joi.number().min(0).max(2).optional(),
-  maxTokens: Joi.number().min(1).max(8000).optional(),
-  functions: Joi.array().items(functionSchema).optional(), // ← 支持 Function Calling
-})
-
-export function validateChatRequest(data) {
-  const { error, value } = chatRequestSchema.validate(data, {
-    abortEarly: false, // 返回所有错误,不只是第一个
-  })
-
-  if (error) {
-    // 格式化错误信息
-    const errors = error.details.map((detail) => ({
-      field: detail.path.join('.'),
-      message: detail.message,
-    }))
-    throw new BadRequestError('Validation failed', errors)
-  }
-
-  return value
+```js
+// 当前代码 — 只处理一次 function_call
+if (result.function_call) {
+  const functionResult = functionExecutor.execute(name, args)
+  messages.push(...)      // 加入 assistant + function 消息
+  result = await aiService.chat(messages, ...)   // 第二次调用 AI
+  // ← 结束。如果 AI 在第二次回复里还想调用函数？直接忽略了。
 }
 ```
 
-### 2.2 在 Controller 中使用
+这在"只调用一个函数"的场景下没问题。但如果用户问：
 
-**文件路径**: `/Users/jianglin/Desktop/backend/AI-backend/src/controllers/chat.controller.js`
+> "帮我算 3+5，然后告诉我现在几点"
 
-```javascript
-import aiService from '../services/ai.service.js'
-import functionExecutor from '../utils/functionExecutor.js'
-import { success } from '../utils/response.js'
-import { validateChatRequest } from '../validators/chatValidator.js'
-import logger from '../utils/logger.js'
+AI 可能会先调用 `sum`，拿到结果后，再调用 `getTime`，最后才给你完整回答。这种**多步函数链**用 `if` 是接不住的。
 
-class ChatController {
-  async chat(req, res) {
-    // Layer 1: HTTP 层验证
-    const validatedData = validateChatRequest(req.body)
+### 1.2 正确的模型：循环
 
-    logger.info('Chat request validated', {
-      provider: validatedData.provider,
-      messageCount: validatedData.messages.length,
-      hasFunctions: !!validatedData.functions,
+```text
+用户消息
+   ↓
+第 1 次调用 AI
+   ├─ 返回普通文本  → 直接结束 ✓
+   └─ 返回 function_call
+         ↓
+      执行函数，把结果加入 messages
+         ↓
+      第 2 次调用 AI
+         ├─ 返回普通文本  → 结束 ✓
+         └─ 返回 function_call
+               ↓
+            再执行函数，再加入 messages
+               ↓
+            第 3 次调用 AI  ...（直到不再调用函数，或达到上限）
+```
+
+---
+
+## 二、改造普通 chat：`if` → `while`
+
+### 2.1 核心改动
+
+```js
+// src/controllers/chat.controller.js
+
+async chat(req, res) {
+  const validatedData = validateChatRequest(req.body)
+  const messages = [...validatedData.messages]
+
+  const callOptions = {
+    provider: validatedData.provider,
+    model: validatedData.model,
+    temperature: validatedData.temperature,
+    max_tokens: validatedData.maxTokens,
+    functions: validatedData.functions,
+  }
+
+  // 第一次调用 AI
+  let result = await aiService.chat(messages, callOptions)
+
+  // ✅ 改成 while：AI 只要还想调用函数，就继续循环
+  const MAX_ITERATIONS = 5   // 防止无限循环
+  let iterations = 0
+
+  while (result.function_call && iterations < MAX_ITERATIONS) {
+    iterations++
+
+    const { name, arguments: args } = result.function_call
+    logger.info(`[iteration ${iterations}] AI requested function: ${name}`, { args })
+
+    // 执行函数（executor 内部会处理 JSON 解析 + 错误）
+    let functionResult
+    try {
+      functionResult = functionExecutor.execute(name, args)
+      logger.info(`Function ${name} executed`, { result: functionResult })
+    } catch (error) {
+      logger.error(`Function ${name} failed`, { error: error.message })
+      // 把错误告诉 AI，让它自行处理（而不是直接抛出中断流程）
+      functionResult = { error: error.message }
+    }
+
+    // 把这一轮的 assistant（带 function_call）+ function 结果 加入历史
+    messages.push({
+      role: 'assistant',
+      content: null,
+      function_call: result.function_call,
+    })
+    messages.push({
+      role: 'function',
+      name,
+      content: typeof functionResult === 'string'
+        ? functionResult
+        : JSON.stringify(functionResult),
     })
 
-    const messages = [...validatedData.messages]
-
-    // 调用 AI Service
-    let result = await aiService.chat(messages, {
-      provider: validatedData.provider,
-      model: validatedData.model,
-      temperature: validatedData.temperature,
-      max_tokens: validatedData.maxTokens,
-      functions: validatedData.functions, // ← 通过验证的 functions
-    })
-
-    // 检查是否需要调用函数
-    if (result.function_call) {
-      // Layer 2 & 3 验证在这里进行
-      // (详见后续章节)
-    }
-
-    return res.json(success(result))
-  }
-}
-
-export default new ChatController()
-```
-
-### 2.3 Joi 验证的优势
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│           Joi 在 HTTP 层的作用                                │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│   1. 统一的错误格式                                          │
-│      {                                                     │
-│        "status": "error",                                  │
-│        "message": "Validation failed",                     │
-│        "errors": [                                         │
-│          { "field": "messages", "message": "..." }         │
-│        ]                                                   │
-│      }                                                     │
-│                                                             │
-│   2. 自动类型转换                                            │
-│      temperature: "0.7" → 0.7 (字符串转数字)                │
-│                                                             │
-│   3. 清晰的约束定义                                          │
-│      .min(1).max(50)  ← 一看就懂                            │
-│      .valid('deepseek', 'openai')                          │
-│                                                             │
-│   4. 完整的错误收集                                          │
-│      abortEarly: false  ← 返回所有错误,不只是第一个          │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
-```
-
----
-
-## 三、Layer 3: 函数层的 Zod 验证
-
-### 3.1 为什么需要 Zod?
-
-AI-backend 目前在函数层使用手动验证:
-
-```javascript
-// functions/sum.js (现有实现)
-export function sum(a, b) {
-  // 手动验证
-  if (typeof a !== 'number' || typeof b !== 'number') {
-    throw new Error('参数必须是数字类型')
+    // 再次调用 AI（带上函数结果）
+    result = await aiService.chat(messages, callOptions)
   }
 
-  if (isNaN(a) || isNaN(b)) {
-    throw new Error('参数不能是 NaN')
+  if (iterations >= MAX_ITERATIONS) {
+    logger.warn(`Function call loop hit MAX_ITERATIONS (${MAX_ITERATIONS}), forcing stop`)
   }
 
-  return a + b
+  return res.json(success(result))
 }
 ```
 
-**问题**:
-- 代码冗长,重复性高
-- 没有类型推断支持
-- 错误信息不统一
-- 难以维护复杂验证规则
+### 2.2 两个关键设计决策
 
-**Zod 解决方案**:
+**① 函数执行错误不要直接 throw**
 
-```javascript
-// functions/sum.zod.js (推荐)
-import { z } from 'zod'
+```js
+// ❌ 这样做会中断整个请求，返回 500
+const functionResult = functionExecutor.execute(name, args)  // 如果 throw，直接崩
 
-// 定义参数 Schema
-export const SumParamsSchema = z.object({
-  a: z.number().describe('第一个加数'),
-  b: z.number().describe('第二个加数'),
-})
-
-// 定义返回值 Schema (可选但推荐)
-export const SumResultSchema = z.number()
-
-export function sum(params) {
-  // 一行完成验证
-  const { a, b } = SumParamsSchema.parse(params)
-
-  const result = a + b
-
-  // 验证返回值 (确保函数内部逻辑正确)
-  return SumResultSchema.parse(result)
-}
-```
-
-### 3.2 Zod 快速入门
-
-```javascript
-import { z } from 'zod'
-
-// ========== 基础类型 ==========
-z.string()       // 字符串
-z.number()       // 数字
-z.boolean()      // 布尔值
-z.array(z.string())  // 字符串数组
-
-// ========== 字符串验证 ==========
-z.string().min(3).max(10)     // 长度限制
-z.string().email()            // 邮箱
-z.string().url()              // URL
-z.string().regex(/^\d+$/)     // 正则
-
-// ========== 数字验证 ==========
-z.number().min(0).max(100)    // 范围
-z.number().int()              // 整数
-z.number().positive()         // 正数
-
-// ========== 对象验证 ==========
-const UserSchema = z.object({
-  name: z.string(),
-  age: z.number().optional(),  // 可选
-  email: z.string().nullable(), // 可为 null
-})
-
-// ========== 枚举 ==========
-z.enum(['pending', 'success', 'error'])
-
-// ========== 默认值 ==========
-z.string().default('default value')
-z.number().default(0)
-
-// ========== 使用 ==========
-const data = { name: 'Alice', age: 25 }
-const result = UserSchema.parse(data)  // 验证并返回
-```
-
-### 3.3 改造 AI-backend 函数
-
-创建 `functions/getTime.zod.js`:
-
-```javascript
-import { z } from 'zod'
-
-// 参数 Schema
-export const GetTimeParamsSchema = z.object({
-  timezone: z
-    .enum(['UTC', 'Asia/Shanghai', 'America/New_York'])
-    .default('Asia/Shanghai')
-    .describe('时区标识符'),
-})
-
-// 返回值 Schema
-export const GetTimeResultSchema = z.string()
-
-export function getTime(params = {}) {
-  // 验证参数 (使用 .catch 提供默认值)
-  const validatedParams = GetTimeParamsSchema.catch({
-    timezone: 'Asia/Shanghai',
-  }).parse(params)
-
-  const { timezone } = validatedParams
-
-  try {
-    const now = new Date()
-    const options = {
-      timeZone: timezone,
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false,
-    }
-
-    const formatter = new Intl.DateTimeFormat('zh-CN', options)
-    const formattedTime = formatter.format(now)
-
-    const result = `当前时间 (${timezone}): ${formattedTime}`
-
-    // 验证返回值
-    return GetTimeResultSchema.parse(result)
-  } catch (error) {
-    throw new Error(`获取时间失败: ${error.message}`)
-  }
-}
-
-// 测试
-if (import.meta.url === `file://${process.argv[1]}`) {
-  console.log(getTime({ timezone: 'Asia/Shanghai' }))
-  console.log(getTime({ timezone: 'UTC' }))
-
-  // 测试类型错误
-  try {
-    getTime({ timezone: 'Invalid/Timezone' })
-  } catch (error) {
-    console.log('错误捕获:', error.message)
-  }
-}
-```
-
----
-
-## 四、集成到 AI-backend 架构
-
-### 4.1 扩展 FunctionExecutor 支持 Zod
-
-创建 `src/utils/functionExecutor.zod.js`:
-
-```javascript
-import logger from './logger.js'
-import { BadRequestError } from '../errors/index.js'
-import { ZodError } from 'zod'
-
-/**
- * 支持 Zod 验证的函数执行器
- */
-export class ZodFunctionExecutor {
-  constructor() {
-    // functions = Map<functionName, { fn, paramsSchema, resultSchema }>
-    this.functions = new Map()
-  }
-
-  /**
-   * 注册函数 (带 Zod Schema)
-   * @param {string} name - 函数名
-   * @param {Object} config - { fn, paramsSchema, resultSchema }
-   */
-  register(name, config) {
-    const { fn, paramsSchema, resultSchema } = config
-
-    if (typeof fn !== 'function') {
-      throw new Error(`${name} must be a function`)
-    }
-
-    this.functions.set(name, { fn, paramsSchema, resultSchema })
-    logger.info(`Registered Zod function: ${name}`)
-  }
-
-  /**
-   * 执行函数 (带完整验证)
-   * @param {string} name - 函数名
-   * @param {string} argumentsJson - JSON 字符串
-   * @returns {any} 函数执行结果
-   */
-  execute(name, argumentsJson) {
-    // 1. 检查函数是否存在
-    if (!this.functions.has(name)) {
-      throw new BadRequestError(`Function ${name} not found`)
-    }
-
-    const { fn, paramsSchema, resultSchema } = this.functions.get(name)
-
-    // 2. 解析 JSON
-    let args
-    try {
-      args = typeof argumentsJson === 'string'
-        ? JSON.parse(argumentsJson)
-        : argumentsJson
-    } catch (error) {
-      logger.error(`Failed to parse arguments for ${name}`, {
-        arguments: argumentsJson,
-        error: error.message,
-      })
-      throw new BadRequestError(`Invalid arguments format: ${error.message}`)
-    }
-
-    // 3. Zod 验证参数
-    try {
-      const validatedArgs = paramsSchema.parse(args)
-      logger.debug(`Function ${name} params validated`, { args: validatedArgs })
-
-      // 4. 执行函数
-      const result = fn(validatedArgs)
-      logger.info(`Function ${name} executed successfully`)
-
-      // 5. 验证返回值 (可选)
-      if (resultSchema) {
-        const validatedResult = resultSchema.parse(result)
-        logger.debug(`Function ${name} result validated`)
-        return validatedResult
-      }
-
-      return result
-
-    } catch (error) {
-      if (error instanceof ZodError) {
-        // Zod 验证错误
-        const messages = error.errors.map(e => `${e.path.join('.')}: ${e.message}`)
-        logger.error(`Zod validation failed for ${name}`, { errors: messages })
-        throw new BadRequestError(`参数验证失败: ${messages.join('; ')}`)
-      }
-
-      // 其他错误
-      logger.error(`Function ${name} execution failed`, {
-        error: error.message,
-        args,
-      })
-      throw new Error(`Function execution failed: ${error.message}`)
-    }
-  }
-
-  list() {
-    return Array.from(this.functions.keys())
-  }
-}
-
-export default new ZodFunctionExecutor()
-```
-
-### 4.2 注册 Zod 函数
-
-创建 `src/config/functions.zod.js`:
-
-```javascript
-import functionExecutor from '../utils/functionExecutor.zod.js'
-import { getTime, GetTimeParamsSchema, GetTimeResultSchema } from '../../functions/getTime.zod.js'
-import { sum, SumParamsSchema, SumResultSchema } from '../../functions/sum.zod.js'
-
-export function initZodFunctions() {
-  // 注册带 Zod Schema 的函数
-  functionExecutor.register('getTime', {
-    fn: getTime,
-    paramsSchema: GetTimeParamsSchema,
-    resultSchema: GetTimeResultSchema,
-  })
-
-  functionExecutor.register('sum', {
-    fn: sum,
-    paramsSchema: SumParamsSchema,
-    resultSchema: SumResultSchema,
-  })
-
-  console.log(`Registered Zod functions: ${functionExecutor.list().join(', ')}`)
-}
-```
-
-### 4.3 完整流程示例
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│     AI-backend 三层验证的完整请求流程                          │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│   1. 用户请求                                                │
-│      POST /api/chat                                         │
-│      {                                                      │
-│        messages: [{ role: "user", content: "10+20=?" }],   │
-│        functions: [sumSchema]                              │
-│      }                                                      │
-│      ↓                                                      │
-│   2. Layer 1: Joi 验证 (chatValidator.js)                   │
-│      ✓ messages 数组长度 1-50                                │
-│      ✓ functions 格式正确                                    │
-│      ✓ provider 有效                                        │
-│      ↓                                                      │
-│   3. Controller → Service → Adapter                         │
-│      AI 返回: { function_call: { name: "sum", args: ... } }│
-│      ↓                                                      │
-│   4. Layer 2: JSON 解析 (parseArguments)                    │
-│      arguments: '{"a":10,"b":20}'                          │
-│      → { a: 10, b: 20 }                                    │
-│      ↓                                                      │
-│   5. Layer 3: Zod 验证 (SumParamsSchema)                    │
-│      ✓ a 是 number 类型                                     │
-│      ✓ b 是 number 类型                                     │
-│      ↓                                                      │
-│   6. 执行函数                                                │
-│      sum({ a: 10, b: 20 }) → 30                            │
-│      ↓                                                      │
-│   7. 验证返回值 (SumResultSchema)                            │
-│      ✓ 结果是 number 类型                                    │
-│      ↓                                                      │
-│   8. 返回给 AI,生成最终回复                                   │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
-```
-
----
-
-## 五、Zod 高级用法
-
-### 5.1 自定义验证逻辑
-
-```javascript
-import { z } from 'zod'
-
-// 确保两个数都是正数
-const PositiveSumSchema = z
-  .object({
-    a: z.number(),
-    b: z.number(),
-  })
-  .refine(
-    data => data.a > 0 && data.b > 0,
-    {
-      message: '两个数必须都是正数',
-    }
-  )
-
-// 测试
+// ✅ 捕获错误，把错误信息作为函数返回值传给 AI
 try {
-  PositiveSumSchema.parse({ a: -5, b: 10 })
+  functionResult = functionExecutor.execute(name, args)
 } catch (error) {
-  console.log(error.errors[0].message)  // "两个数必须都是正数"
+  functionResult = { error: error.message }
 }
 ```
 
-### 5.2 数据转换
+这样 AI 会收到 `{ error: "Function xxx not found" }`，它可以告诉用户"这个函数无法使用"，而不是你的服务直接挂掉。
 
-```javascript
-// 自动转换字符串为数字 (容错处理)
-const FlexibleSumSchema = z.object({
-  a: z.string().transform(val => Number(val)),
-  b: z.string().transform(val => Number(val)),
-})
+**② MAX_ITERATIONS 防止死循环**
 
-const result = FlexibleSumSchema.parse({ a: '10', b: '20' })
-console.log(result)  // { a: 10, b: 20 }
+AI 理论上可能一直返回 `function_call`（比如提示词设计有问题，或模型行为异常）。加上上限是生产代码的标配。5 次通常够用，极端场景可以调高。
+
+---
+
+## 三、Stream 模式的 Function Calling
+
+### 3.1 问题所在
+
+打开 `src/controllers/chat.controller.js`，看 `chatStream` 方法：
+
+```js
+async chatStream(req, res) {
+  const validatedData = validateChatRequest(req.body)
+  const streamHandler = new StreamHandler(res)
+  const stream = await aiService.chatStream(validatedData.messages, { ... })
+  await streamHandler.handleStream(stream)
+  // ← 完全没有 function calling 处理
+}
 ```
 
-### 5.3 条件验证
+`streamHandler.handleStream` 只会把 `delta.content` 里的文字 token 流式发出去。如果 AI 不返回文字，而是返回 `function_call`，这段代码会静默忽略。
 
-```javascript
-const TemperatureSchema = z.object({
-  type: z.enum(['celsius', 'fahrenheit']),
-  value: z.number(),
-}).refine(
-  data => {
-    if (data.type === 'celsius') {
-      return data.value >= -273.15  // 绝对零度
-    }
-    return data.value >= -459.67  // 华氏度绝对零度
-  },
-  {
-    message: '温度值低于绝对零度',
+### 3.2 Stream 下 function_call 的特殊性
+
+在非 stream 模式，函数调用是一次性返回的：
+
+```json
+{
+  "function_call": {
+    "name": "getTime",
+    "arguments": "{\"timezone\":\"Asia/Shanghai\"}"
   }
-)
+}
+```
+
+在 stream 模式，同样的内容是**逐 token 分片流出来的**：
+
+```text
+chunk 1: { "delta": { "function_call": { "name": "getTime", "arguments": "" } } }
+chunk 2: { "delta": { "function_call": { "arguments": "{\"time" } } }
+chunk 3: { "delta": { "function_call": { "arguments": "zone\":" } } }
+chunk 4: { "delta": { "function_call": { "arguments": "\"Asia/Shanghai\"}" } } }
+chunk 5: { "finish_reason": "function_call" }
+```
+
+所以处理 stream Function Calling 的核心思路：
+
+```text
+1. 检测第一个 chunk 是否有 function_call.name  → 进入"函数模式"
+2. 持续拼接后续 chunk 的 arguments 片段
+3. 收到 finish_reason: "function_call" 后，拼接完成
+4. 执行函数，拿到结果
+5. 继续用普通 chat（非 stream）让 AI 生成最终回复
+   或者再次开一个新 stream 让 AI 流式输出最终回复
+```
+
+### 3.3 改造 StreamHandler
+
+先扩展 `src/utils/streamHandler.js`，让它能收集 function_call：
+
+```js
+// src/utils/streamHandler.js
+
+export class StreamHandler {
+  constructor(res) {
+    this.res = res
+    this.setupHeaders()
+  }
+
+  setupHeaders() {
+    this.res.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
+    this.res.setHeader('Cache-Control', 'no-cache')
+    this.res.setHeader('Connection', 'keep-alive')
+  }
+
+  sendChunk(data) {
+    this.res.write(`data: ${JSON.stringify(data)}\n\n`)
+  }
+
+  sendDone() {
+    this.res.write('data: [DONE]\n\n')
+  }
+
+  sendError(error) {
+    this.res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`)
+  }
+
+  end() {
+    this.res.end()
+  }
+
+  /**
+   * 原来的流处理：只处理文字 token
+   */
+  async handleStream(stream) {
+    try {
+      for await (const chunk of stream) {
+        const content = chunk.choices[0]?.delta?.content
+        if (content) {
+          this.sendChunk(chunk)
+        }
+      }
+      this.sendDone()
+    } catch (error) {
+      logger.error('Stream handler error:', error)
+      this.sendError(error)
+    } finally {
+      this.end()
+    }
+  }
+
+  /**
+   * ✅ 新增：支持 Function Calling 的流处理
+   *
+   * 返回值：
+   *   - { type: 'done' }                          → 正常结束，纯文字回复已流出
+   *   - { type: 'function_call', name, arguments } → AI 要调用函数，调用方去执行
+   */
+  async handleStreamWithFunctionCall(stream) {
+    let functionCallName = ''
+    let functionCallArgs = ''
+    let hasFunctionCall = false
+
+    try {
+      for await (const chunk of stream) {
+        const choice = chunk.choices[0]
+        if (!choice) continue
+
+        const delta = choice.delta
+
+        // 检测是否是 function_call 模式
+        if (delta?.function_call) {
+          hasFunctionCall = true
+          if (delta.function_call.name) {
+            functionCallName = delta.function_call.name
+          }
+          if (delta.function_call.arguments) {
+            functionCallArgs += delta.function_call.arguments
+          }
+          // function_call 期间不向客户端发送任何内容（等函数执行完再说）
+          continue
+        }
+
+        // 普通文字 token：流式发给客户端
+        if (delta?.content) {
+          this.sendChunk(chunk)
+        }
+
+        // 检查结束原因
+        if (choice.finish_reason === 'function_call') {
+          // 函数调用结束，告诉调用方
+          return {
+            type: 'function_call',
+            name: functionCallName,
+            arguments: functionCallArgs,
+          }
+        }
+
+        if (choice.finish_reason === 'stop') {
+          // 正常结束
+          this.sendDone()
+          return { type: 'done' }
+        }
+      }
+
+      // stream 结束但没有明确的 finish_reason
+      if (hasFunctionCall) {
+        return {
+          type: 'function_call',
+          name: functionCallName,
+          arguments: functionCallArgs,
+        }
+      }
+
+      this.sendDone()
+      return { type: 'done' }
+
+    } catch (error) {
+      logger.error('Stream handler error:', error)
+      this.sendError(error)
+      return { type: 'done' }
+    } finally {
+      // 注意：不在这里 end()，由 controller 决定何时关闭
+    }
+  }
+}
+```
+
+### 3.4 改造 chatStream Controller
+
+```js
+// src/controllers/chat.controller.js
+
+async chatStream(req, res) {
+  const validatedData = validateChatRequest(req.body)
+  const messages = [...validatedData.messages]
+
+  const callOptions = {
+    provider: validatedData.provider,
+    model: validatedData.model,
+    temperature: validatedData.temperature,
+    max_tokens: validatedData.maxTokens,
+    functions: validatedData.functions,
+  }
+
+  const streamHandler = new StreamHandler(res)
+  const MAX_ITERATIONS = 5
+  let iterations = 0
+
+  // ✅ 外层也是循环：AI 可能连续调用多个函数
+  while (iterations < MAX_ITERATIONS) {
+    // 开启一个新的 stream
+    const stream = await aiService.chatStream(messages, callOptions)
+    const outcome = await streamHandler.handleStreamWithFunctionCall(stream)
+
+    if (outcome.type === 'done') {
+      // 正常结束，流已经发完
+      break
+    }
+
+    if (outcome.type === 'function_call') {
+      iterations++
+      const { name, arguments: args } = outcome
+      logger.info(`[stream iteration ${iterations}] AI requested function: ${name}`)
+
+      // 执行函数
+      let functionResult
+      try {
+        functionResult = functionExecutor.execute(name, args)
+      } catch (error) {
+        logger.error(`Function ${name} failed`, { error: error.message })
+        functionResult = { error: error.message }
+      }
+
+      // 把这一轮加入 messages
+      messages.push({
+        role: 'assistant',
+        content: null,
+        function_call: { name, arguments: args },
+      })
+      messages.push({
+        role: 'function',
+        name,
+        content: typeof functionResult === 'string'
+          ? functionResult
+          : JSON.stringify(functionResult),
+      })
+
+      // 继续循环，让 AI 生成下一步（可能还是 function_call，也可能是最终回答）
+    }
+  }
+
+  // 确保 SSE 连接关闭
+  streamHandler.end()
+}
+```
+
+### 3.5 整体流程图
+
+```text
+POST /api/chat/stream
+        ↓
+validateChatRequest
+        ↓
+aiService.chatStream(messages)   ← 第 1 次开 stream
+        ↓
+handleStreamWithFunctionCall
+  ├─ 返回 { type: 'done' }
+  │       ↓
+  │   SSE 流结束，res.end()  ✓
+  │
+  └─ 返回 { type: 'function_call', name, arguments }
+          ↓
+      执行函数，得到结果
+          ↓
+      messages.push(assistant + function)
+          ↓
+      aiService.chatStream(messages)   ← 第 2 次开 stream
+          ↓
+      handleStreamWithFunctionCall
+          ├─ 返回 { type: 'done' }  → SSE 流结束 ✓
+          └─ 返回 { type: 'function_call' }  → 继续循环...
 ```
 
 ---
 
-## 六、测试多层验证
+## 四、普通 chat 和 stream chat 的完整对比
 
-创建测试文件 `test-multi-layer-validation.http`:
+| 维度 | chat（普通） | chatStream（流式） |
+|------|-------------|------------------|
+| function_call 获取 | 一次性返回完整 JSON | 逐 token 拼接，需要手动收集 |
+| 中间过程展示 | 不展示 | 文字 token 实时发给客户端，function 调用期间静默 |
+| 循环机制 | `while (result.function_call)` | `while` 内每次开新 stream |
+| 最终结束 | `res.json(success(result))` | `streamHandler.end()` |
+| 复杂度 | 较低 | 较高，需要区分 delta 类型 |
+
+---
+
+## 五、验证
+
+### 5.1 测试多步函数调用（普通模式）
 
 ```http
-### 测试 1: 正常请求 (通过所有验证层)
 POST http://localhost:3000/api/chat
 Content-Type: application/json
 
 {
   "messages": [
-    { "role": "user", "content": "帮我算 10 + 20" }
+    { "role": "user", "content": "帮我算 3+5，然后告诉我现在北京时间" }
   ],
   "functions": [
     {
@@ -649,92 +472,69 @@ Content-Type: application/json
         },
         "required": ["a", "b"]
       }
+    },
+    {
+      "name": "getTime",
+      "description": "获取当前时间",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "timezone": { "type": "string" }
+        }
+      }
     }
   ]
 }
+```
 
-### 测试 2: Layer 1 验证失败 (messages 超过限制)
-POST http://localhost:3000/api/chat
+**预期日志**：
+```
+[iteration 1] AI requested function: sum
+Function sum executed { result: 8 }
+[iteration 2] AI requested function: getTime
+Function getTime executed { result: "当前时间 (Asia/Shanghai): 2026-04-13 ..." }
+```
+
+### 5.2 测试 Stream 模式
+
+```http
+POST http://localhost:3000/api/chat/stream
 Content-Type: application/json
 
 {
   "messages": [
-    // ... 51 条消息 (超过 max 50)
+    { "role": "user", "content": "现在几点？" }
   ],
-  "functions": []
+  "functions": [
+    {
+      "name": "getTime",
+      "description": "获取当前时间",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "timezone": { "type": "string" }
+        }
+      }
+    }
+  ]
 }
-
-### 测试 3: Layer 2 验证失败 (无效 JSON)
-# AI 返回的 arguments 格式错误
-
-### 测试 4: Layer 3 验证失败 (Zod 类型错误)
-# AI 传递: { a: "hello", b: 20 }
 ```
 
----
+**预期行为**：
+- AI 先发出 `function_call`（stream 静默收集）
+- 执行 `getTime`，得到时间字符串
+- 重新开 stream，AI 流式输出最终回答（客户端能看到 token 逐字出现）
 
-## 七、学习检查清单
+### 5.3 检查循环限制
 
-### 第一层:架构理解
-
-- [ ] 理解三层验证的必要性
-- [ ] 知道 Joi 和 Zod 的职责分工
-- [ ] 理解每一层防御什么问题
-
-### 第二层:工具掌握
-
-- [ ] 掌握 Joi 的基本用法
-- [ ] 掌握 Zod 的基本用法
-- [ ] 能够编写验证 Schema
-- [ ] 能够处理验证错误
-
-### 第三层:实践能力
-
-- [ ] 在 AI-backend 中实现了 Joi 验证
-- [ ] 改造了函数支持 Zod 验证
-- [ ] 扩展了 FunctionExecutor
-- [ ] 测试了完整的验证流程
+观察日志：如果看到 `Function call loop hit MAX_ITERATIONS`，说明 AI 陷入了循环，限制生效。
 
 ---
 
-## 八、常见问题
+## 六、小结
 
-### Q1: Zod 会影响性能吗?
-
-**答**: 会有轻微影响,但换来的是类型安全:
-
-- **开发环境**: 完全值得,帮助快速发现错误
-- **生产环境**: 影响很小 (毫秒级),可以通过缓存 Schema 优化
-- **AI-backend 实践**: 在函数执行前验证,性能损耗可忽略
-
-### Q2: 必须同时使用 Joi 和 Zod 吗?
-
-**答**: 不是必须,但推荐:
-
-- **小项目**: 只用 Joi 或 Zod 之一即可
-- **中大项目**: 两者结合,各司其职
-- **AI-backend**: Joi (HTTP) + Zod (函数) 是最佳实践
-
-### Q3: 如何选择验证工具?
-
-**答**: 看场景:
-
-| 场景 | 推荐工具 | 原因 |
-|------|----------|------|
-| HTTP API 请求验证 | Joi | 错误信息友好,Express 生态成熟 |
-| 函数参数验证 | Zod | 类型推断,性能更好 |
-| TypeScript 项目 | Zod | 原生支持类型推断 |
-| 复杂业务规则 | 两者结合 | 发挥各自优势 |
-
----
-
-## 九、下一步
-
-完成本节后,你已经掌握了企业级的多层验证策略。接下来:
-
-1. **Step 34**: 构建完整的天气查询 Demo,应用所有验证技巧
-2. **Step 35**: 总结企业级最佳实践
-
----
-
-**记住: 多层验证不是重复,而是不同层次的防御。HTTP 层快速拦截恶意请求,函数层确保类型安全,Schema 层指导 AI 正确调用。**
+1. **`if` → `while`**：处理多步函数调用的核心改动，三行代码，意义重大。
+2. **MAX_ITERATIONS**：生产代码必须有上限，AI 的行为不可完全预测。
+3. **Stream 下 function_call 是碎片化的**：需要手动按 name + arguments 拼接，不能直接用。
+4. **Stream + Function Calling 的关键设计**：函数调用期间对客户端静默，拿到结果后再开新 stream 流出最终回答。
+5. **函数错误不要直接 throw**：转成 `{ error: message }` 回传给 AI，让 AI 优雅处理，服务不崩。
