@@ -141,9 +141,9 @@ AI-backend/
 | **Function Schema** | 函数的 JSON 描述 | `schemas/*.schema.js` |
 | **Function Implementation** | 实际可执行的函数 | `functions/*.js` |
 | **Function Executor** | 执行器,注册和调用函数 | `src/utils/functionExecutor.js` |
-| **function_call** | AI 返回的调用指令 | Controller 中解析 |
+| **tool_calls** | AI 返回的调用指令数组 | Controller 中解析 `tool_calls[0]` |
 | **arguments** | JSON 字符串参数 | `JSON.parse()` 解析 |
-| **function message** | 函数结果消息 | role: 'function' |
+| **tool message** | 函数结果消息 | role: 'tool', 携带 tool_call_id |
 
 ### 2.2 完整调用流程
 
@@ -156,7 +156,7 @@ AI-backend/
 │   POST /api/chat                                            │
 │   {                                                         │
 │     messages: [{ role: "user", content: "现在几点?" }],      │
-│     functions: [getTimeSchema]                              │
+│     tools: [{ type: "function", function: getTimeSchema }]  │
 │   }                                                         │
 │      ↓                                                      │
 │   【Layer 1: Route】                                         │
@@ -170,7 +170,7 @@ AI-backend/
 │      ↓                                                      │
 │   【Layer 3: Validator】                                     │
 │   validators/chatValidator.js                               │
-│   - 使用 Joi 验证 messages 和 functions                      │
+│   - 使用 Joi 验证 messages 和 tools                          │
 │   - 抛出 BadRequestError 如果无效                            │
 │      ↓                                                      │
 │   【Layer 4: Service】                                       │
@@ -182,13 +182,13 @@ AI-backend/
 │   【Layer 5: Adapter】                                       │
 │   adapters/deepseek.adapter.js                              │
 │   - 调用 OpenAI SDK                                         │
-│   - 传递 functions 参数                                     │
+│   - 传递 tools 参数                                         │
 │   - 格式化响应                                              │
 │      ↓                                                      │
 │   【Layer 6: AI Provider】                                   │
 │   DeepSeek / OpenAI API                                     │
 │   - 分析用户意图                                            │
-│   - 返回 function_call                                      │
+│   - 返回 tool_calls 数组                                    │
 │      ↓                                                      │
 │   【Layer 7: Function Executor】                             │
 │   utils/functionExecutor.js                                 │
@@ -204,7 +204,7 @@ AI-backend/
 │      ↓                                                      │
 │   【Layer 9: Second AI Call】                                │
 │   再次调用 ai.service.chat()                                 │
-│   - 添加 function 消息                                       │
+│   - 添加 tool 消息 (role: "tool", tool_call_id)              │
 │   - AI 生成最终回复                                          │
 │      ↓                                                      │
 │   【Layer 10: Response】                                     │
@@ -274,9 +274,10 @@ class ChatController {
       logger.error('Function execution failed', { error })
 
       // 告诉 AI 执行失败,让它生成用户友好的回复
+      messages.push({ role: 'assistant', content: null, tool_calls: result.tool_calls })
       messages.push({
-        role: 'function',
-        name: name,
+        role: 'tool',
+        tool_call_id: toolCall.id,
         content: JSON.stringify({ error: error.message })
       })
 
@@ -353,7 +354,7 @@ logger.info('Function executed', {
 // validators/chatValidator.js
 const chatRequestSchema = Joi.object({
   messages: Joi.array().items(messageSchema).min(1).max(50).required(),
-  functions: Joi.array().items(functionSchema).optional(),
+  tools: Joi.array().items(toolSchema).optional(),
   provider: Joi.string().valid('deepseek', 'openai').optional()
 })
 
@@ -484,13 +485,14 @@ export class NewProviderAdapter extends BaseAdapter {
   }
 
   async chat(messages, options = {}) {
-    const { functions, ...restOptions } = options
+    const { tools, ...restOptions } = options
 
     try {
       const response = await this.client.chat({
         model: this.model,
         messages: this.formatMessages(messages),
-        functions: functions,
+        tools: tools,
+        tool_choice: tools ? 'auto' : undefined,
         ...restOptions,
       })
 
@@ -514,7 +516,7 @@ export class NewProviderAdapter extends BaseAdapter {
     return {
       role: 'assistant',
       content: response.choices[0].message.content,
-      function_call: response.choices[0].message.function_call,
+      tool_calls: response.choices[0].message.tool_calls,
       provider: 'new-provider',  // ← 标识提供商
     }
   }

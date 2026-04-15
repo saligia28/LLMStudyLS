@@ -21,24 +21,30 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│         AI 返回的 function_call 格式                           │
+│         AI 返回的 tool_calls 格式                              │
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
 │   {                                                         │
 │     role: "assistant",                                      │
 │     content: null,                                          │
-│     function_call: {                                        │
-│       name: "sum",                 // ← 函数名(字符串)       │
-│       arguments: "{\"a\":10,\"b\":20}"  // ← JSON 字符串!   │
-│     }                                                       │
+│     tool_calls: [{              // ← 新版：tool_calls 数组   │
+│       id: "call_abc123",        // ← 唯一 ID，返回时必须带上  │
+│       type: "function",                                     │
+│       function: {                                           │
+│         name: "sum",            // ← 函数名(字符串)          │
+│         arguments: "{\"a\":10,\"b\":20}"  // ← JSON 字符串! │
+│       }                                                     │
+│     }]                                                      │
 │   }                                                         │
 │                                                             │
 │   关键理解:                                                  │
 │   ┌─────────────────────────────────────────────────┐       │
 │   │  arguments 是 JSON 字符串,不是对象!              │       │
 │   │                                                 │       │
-│   │  ✗ 错误: arguments.a  → undefined               │       │
-│   │  ✓ 正确: JSON.parse(arguments).a  → 10          │       │
+│   │  ✗ 错误: tool_calls[0].function.arguments.a     │       │
+│   │  ✓ 正确:                                        │       │
+│   │    JSON.parse(tool_calls[0].function.arguments) │       │
+│   │    .a  → 10                                     │       │
 │   │                                                 │       │
 │   │  AI-backend 在哪里解析?                          │       │
 │   │  → FunctionExecutor.execute() 方法中             │       │
@@ -50,28 +56,32 @@
 ### 1.2 常见的解析陷阱
 
 ```javascript
-// ❌ 陷阱 1: 直接当对象使用
-const functionCall = assistantMessage.function_call
-const a = functionCall.arguments.a  // undefined! (字符串没有 a 属性)
+// ❌ 陷阱 1: 仍用旧的 function_call 字段
+const functionCall = assistantMessage.function_call  // undefined！新版没有这个字段
 
-// ❌ 陷阱 2: 无错误处理的解析
-const args = JSON.parse(functionCall.arguments)  // 可能抛异常
-sum(args.a, args.b)  // 如果解析失败,整个程序崩溃
+// ❌ 陷阱 2: 忘记取数组第一项
+const toolCall = assistantMessage.tool_calls        // 取到的是数组
+const a = toolCall.function.arguments.a             // TypeError！数组没有 function 属性
 
-// ❌ 陷阱 3: 假设 arguments 一定是字符串
-// AI 有时可能返回对象(虽然不符合规范)
-const args = JSON.parse(functionCall.arguments)  // 如果已是对象,报错
+// ❌ 陷阱 3: 直接当对象使用
+const toolCall = assistantMessage.tool_calls[0]
+const a = toolCall.function.arguments.a  // undefined! (字符串没有 a 属性)
+
+// ❌ 陷阱 4: 无错误处理的解析
+const args = JSON.parse(toolCall.function.arguments)  // 可能抛异常
 
 // ✓ AI-backend 的正确做法
+const toolCall = assistantMessage.tool_calls[0]  // 取第一个工具调用
 try {
-  const args = typeof functionCall.arguments === 'string'
-    ? JSON.parse(functionCall.arguments)
-    : functionCall.arguments
+  const rawArgs = toolCall.function.arguments
+  const args = typeof rawArgs === 'string'
+    ? JSON.parse(rawArgs)
+    : rawArgs  // 容错：某些情况下已是对象
 
   const result = sum(args.a, args.b)
 } catch (error) {
   // 使用 AI-backend 的错误体系
-  logger.error('参数解析失败', { error, arguments: functionCall.arguments })
+  logger.error('参数解析失败', { error, arguments: toolCall.function.arguments })
   throw new BadRequestError(`Invalid arguments: ${error.message}`)
 }
 ```
@@ -463,13 +473,16 @@ class ChatController {
       functions: validatedData.functions,
     })
 
-    // 检查是否需要调用函数
-    if (result.function_call) {
-      const { name, arguments: args } = result.function_call
+    // 检查是否需要调用函数（新版：检查 tool_calls 数组）
+    if (result.tool_calls && result.tool_calls.length > 0) {
+      const toolCall = result.tool_calls[0]
+      const name = toolCall.function.name
+      const args = toolCall.function.arguments
 
-      logger.info('AI requested function call', {
+      logger.info('AI requested tool call', {
         name,
         arguments: args,
+        toolCallId: toolCall.id,
         requestId: req.requestId
       })
 
@@ -484,16 +497,17 @@ class ChatController {
           requestId: req.requestId
         })
 
-        // 添加消息记录
+        // 添加 assistant 消息（必须保留 tool_calls 原始数组）
         messages.push({
           role: 'assistant',
           content: null,
-          function_call: result.function_call,
+          tool_calls: result.tool_calls,
         })
 
+        // 添加 tool 消息（必须带 tool_call_id！）
         messages.push({
-          role: 'function',
-          name: name,
+          role: 'tool',
+          tool_call_id: toolCall.id,  // ← 关键：与上方 tool_calls[0].id 对应
           content: typeof functionResult === 'string'
             ? functionResult
             : JSON.stringify(functionResult),
@@ -511,8 +525,8 @@ class ChatController {
         // ========== 错误分类处理 ==========
 
         if (error instanceof BadRequestError) {
-          // 参数解析错误 - 告诉用户
-          logger.error('Function call failed due to invalid arguments', {
+          // 参数解析错误
+          logger.error('Tool call failed due to invalid arguments', {
             name,
             arguments: args,
             error: error.message,
@@ -523,11 +537,11 @@ class ChatController {
           messages.push({
             role: 'assistant',
             content: null,
-            function_call: result.function_call,
+            tool_calls: result.tool_calls,
           })
           messages.push({
-            role: 'function',
-            name: name,
+            role: 'tool',
+            tool_call_id: toolCall.id,
             content: JSON.stringify({
               error: 'invalid_arguments',
               message: '参数格式错误,请检查输入'
@@ -545,11 +559,11 @@ class ChatController {
           messages.push({
             role: 'assistant',
             content: null,
-            function_call: result.function_call,
+            tool_calls: result.tool_calls,
           })
           messages.push({
-            role: 'function',
-            name: name,
+            role: 'tool',
+            tool_call_id: toolCall.id,
             content: JSON.stringify({
               error: 'execution_failed',
               message: error.message
@@ -646,7 +660,7 @@ logger.error('Failed to parse arguments', {
 ```
 Request → requestId (UUID)
     ↓
-Controller → 记录 function_call + requestId
+Controller → 记录 tool_calls + requestId
     ↓
 FunctionExecutor.parseArguments → 记录解析失败 + requestId
     ↓

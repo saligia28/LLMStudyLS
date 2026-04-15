@@ -8,7 +8,7 @@
 
 1. 理解 AI-backend 项目中的完整函数调用流程
 2. 学习如何通过 AIService 和 Adapter 传递函数定义
-3. 掌握解析 function_call 并执行函数的方法
+3. 掌握解析 tool_calls 并执行函数的方法
 4. 实现多轮对话和函数执行的集成
 
 > **实战重点**: 本教程将展示如何在 AI-backend 的架构基础上扩展 Function Calling 功能。
@@ -28,7 +28,7 @@
 │      POST /api/chat                                         │
 │      {                                                      │
 │        messages: [{ role: "user", content: "现在几点?" }],   │
-│        functions: [getTimeSchema, sumSchema]  ← 传入 Schema │
+│        tools: [{ type: "function", function: getTimeSchema }] │
 │      }                                                      │
 │      ↓                                                      │
 │   2. ChatController 接收请求                                 │
@@ -38,14 +38,15 @@
 │   3. AIService 处理                                          │
 │      - 获取 provider (deepseek/openai)                      │
 │      - 从 factory 获取对应 adapter                           │
-│      - 调用 adapter.chat(messages, { functions })          │
+│      - 调用 adapter.chat(messages, { tools })              │
 │      ↓                                                      │
 │   4. DeepSeekAdapter 发送请求                                │
 │      const response = await this.client.chat.completions    │
 │        .create({                                            │
 │          model: 'deepseek-chat',                           │
 │          messages: messages,                               │
-│          functions: functions  ← 传给 AI Provider           │
+│          tools: tools,         ← 传给 AI Provider（新版）    │
+│          tool_choice: 'auto',                              │
 │        })                                                   │
 │      ↓                                                      │
 │   5. AI Provider 返回                                        │
@@ -54,20 +55,25 @@
 │          message: {                                        │
 │            role: "assistant",                              │
 │            content: null,                                  │
-│            function_call: {                                │
-│              name: "getTime",                              │
-│              arguments: '{"timezone":"Asia/Shanghai"}'     │
-│            }                                               │
+│            tool_calls: [{      ← 新版字段（数组！）           │
+│              id: "call_abc",                               │
+│              type: "function",                             │
+│              function: {                                   │
+│                name: "getTime",                            │
+│                arguments: '{"timezone":"Asia/Shanghai"}'   │
+│              }                                             │
+│            }]                                              │
 │          }                                                 │
 │        }]                                                  │
 │      }                                                      │
 │      ↓                                                      │
 │   6. 【需要我们实现】解析并执行函数                            │
-│      const args = JSON.parse(arguments)                    │
+│      const toolCall = tool_calls[0]                        │
+│      const args = JSON.parse(toolCall.function.arguments)  │
 │      const result = getTime(args.timezone)                 │
 │      ↓                                                      │
 │   7. 【需要我们实现】将结果返回给 AI                           │
-│      再次调用 chat API,添加 function 消息                    │
+│      再次调用 chat API,添加 role:"tool" 消息                 │
 │      ↓                                                      │
 │   8. AI 生成最终回复                                         │
 │      "当前北京时间是 2024-01-27 14:30:45"                   │
@@ -85,7 +91,7 @@
 
 **✗ 待扩展**:
 - 函数执行器(Function Executor)
-- function_call 的解析和调用
+- tool_calls 的解析和调用
 - 多轮对话管理
 - 函数结果的处理
 
@@ -252,7 +258,7 @@ app.listen(PORT, () => {
 
 ## 三、扩展 ChatController 支持函数调用
 
-### 3.1 处理 function_call 响应
+### 3.1 处理 tool_calls 响应
 
 修改 `src/controllers/chat.controller.js`:
 
@@ -278,14 +284,15 @@ class ChatController {
       model: validatedData.model,
       temperature: validatedData.temperature,
       max_tokens: validatedData.maxTokens,
-      functions: validatedData.functions, // ← 传入函数定义
+      tools: validatedData.tools, // ← 新版：传入 tools 定义
     })
 
-    // 检查是否需要调用函数
-    if (result.function_call) {
-      const { name, arguments: args } = result.function_call
+    // 检查是否需要调用函数（新版：检查 tool_calls 数组）
+    if (result.tool_calls && result.tool_calls.length > 0) {
+      const toolCall = result.tool_calls[0]           // 取第一个工具调用
+      const { name, arguments: args } = toolCall.function
 
-      logger.info(`AI requested function call`, { name, args })
+      logger.info(`AI requested tool call`, { name, args, toolCallId: toolCall.id })
 
       try {
         // 执行函数
@@ -293,17 +300,17 @@ class ChatController {
 
         logger.info(`Function ${name} executed`, { result: functionResult })
 
-        // 添加 assistant 消息(带 function_call)
+        // 添加 assistant 消息（带 tool_calls，必须原样保留）
         messages.push({
           role: 'assistant',
           content: null,
-          function_call: result.function_call,
+          tool_calls: result.tool_calls,
         })
 
-        // 添加 function 消息(函数执行结果)
+        // 添加 tool 消息（函数执行结果，必须带 tool_call_id）
         messages.push({
-          role: 'function',
-          name: name,
+          role: 'tool',
+          tool_call_id: toolCall.id,  // ← 必须与上面的 tool_calls[0].id 对应
           content: typeof functionResult === 'string'
             ? functionResult
             : JSON.stringify(functionResult),
@@ -326,11 +333,11 @@ class ChatController {
         messages.push({
           role: 'assistant',
           content: null,
-          function_call: result.function_call,
+          tool_calls: result.tool_calls,
         })
         messages.push({
-          role: 'function',
-          name: name,
+          role: 'tool',
+          tool_call_id: toolCall.id,
           content: JSON.stringify({ error: error.message }),
         })
 
@@ -359,19 +366,22 @@ export default new ChatController()
 import Joi from 'joi'
 import { BadRequestError } from '../errors/index.js'
 
-// 消息 Schema
+// 消息 Schema（新版增加 tool role）
 const messageSchema = Joi.object({
-  role: Joi.string().valid('system', 'user', 'assistant', 'function').required(),
+  role: Joi.string().valid('system', 'user', 'assistant', 'tool').required(),
   content: Joi.string().max(10000).allow(null),
-  name: Joi.string().optional(), // function role 需要
-  function_call: Joi.object().optional(), // assistant 带函数调用时
+  tool_call_id: Joi.string().optional(), // tool role 需要
+  tool_calls: Joi.array().optional(),    // assistant 带工具调用时
 })
 
-// Function Schema
-const functionSchema = Joi.object({
-  name: Joi.string().required(),
-  description: Joi.string().required(),
-  parameters: Joi.object().required(),
+// Tool Schema（新版用 tools 数组，每项包裹一层 type + function）
+const toolSchema = Joi.object({
+  type: Joi.string().valid('function').required(),
+  function: Joi.object({
+    name: Joi.string().required(),
+    description: Joi.string().required(),
+    parameters: Joi.object().required(),
+  }).required(),
 })
 
 // 聊天请求 Schema
@@ -381,7 +391,7 @@ const chatRequestSchema = Joi.object({
   model: Joi.string().optional(),
   temperature: Joi.number().min(0).max(2).optional(),
   maxTokens: Joi.number().min(1).max(8000).optional(),
-  functions: Joi.array().items(functionSchema).optional(), // ← 新增
+  tools: Joi.array().items(toolSchema).optional(), // ← 新版字段
 })
 
 export function validateChatRequest(data) {
@@ -418,21 +428,24 @@ Content-Type: application/json
   "messages": [
     { "role": "user", "content": "现在几点了?" }
   ],
-  "functions": [
+  "tools": [
     {
-      "name": "getTime",
-      "description": "获取指定时区的当前时间。如果不指定时区,返回北京时间。",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "timezone": {
-            "type": "string",
-            "description": "时区标识符",
-            "enum": ["UTC", "Asia/Shanghai", "America/New_York"],
-            "default": "Asia/Shanghai"
-          }
-        },
-        "required": []
+      "type": "function",
+      "function": {
+        "name": "getTime",
+        "description": "获取指定时区的当前时间。如果不指定时区,返回北京时间。",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "timezone": {
+              "type": "string",
+              "description": "时区标识符",
+              "enum": ["UTC", "Asia/Shanghai", "America/New_York"],
+              "default": "Asia/Shanghai"
+            }
+          },
+          "required": []
+        }
       }
     }
   ]
@@ -446,17 +459,20 @@ Content-Type: application/json
   "messages": [
     { "role": "user", "content": "帮我算一下 123 加 456 等于多少" }
   ],
-  "functions": [
+  "tools": [
     {
-      "name": "sum",
-      "description": "计算两个数字的和。支持整数和浮点数。",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "a": { "type": "number", "description": "第一个加数" },
-          "b": { "type": "number", "description": "第二个加数" }
-        },
-        "required": ["a", "b"]
+      "type": "function",
+      "function": {
+        "name": "sum",
+        "description": "计算两个数字的和。支持整数和浮点数。",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "a": { "type": "number", "description": "第一个加数" },
+            "b": { "type": "number", "description": "第二个加数" }
+          },
+          "required": ["a", "b"]
+        }
       }
     }
   ]
@@ -470,31 +486,37 @@ Content-Type: application/json
   "messages": [
     { "role": "user", "content": "现在几点?顺便帮我算 10+20" }
   ],
-  "functions": [
+  "tools": [
     {
-      "name": "getTime",
-      "description": "获取当前时间",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "timezone": {
-            "type": "string",
-            "enum": ["UTC", "Asia/Shanghai", "America/New_York"]
-          }
-        },
-        "required": []
+      "type": "function",
+      "function": {
+        "name": "getTime",
+        "description": "获取当前时间",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "timezone": {
+              "type": "string",
+              "enum": ["UTC", "Asia/Shanghai", "America/New_York"]
+            }
+          },
+          "required": []
+        }
       }
     },
     {
-      "name": "sum",
-      "description": "计算两个数的和",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "a": { "type": "number" },
-          "b": { "type": "number" }
-        },
-        "required": ["a", "b"]
+      "type": "function",
+      "function": {
+        "name": "sum",
+        "description": "计算两个数的和",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "a": { "type": "number" },
+            "b": { "type": "number" }
+          },
+          "required": ["a", "b"]
+        }
       }
     }
   ]
@@ -508,11 +530,11 @@ Content-Type: application/json
 ```
 1. 用户: "现在几点了?"
    ↓
-2. AI 返回 function_call: { name: "getTime", arguments: "{}" }
+2. AI 返回 tool_calls: [{ id: "call_xxx", function: { name: "getTime", arguments: "{}" } }]
    ↓
 3. 执行 getTime() → "当前时间 (Asia/Shanghai): 2024-01-27 14:30:45"
    ↓
-4. 将结果发回 AI
+4. 将结果以 role:"tool" + tool_call_id 发回 AI
    ↓
 5. AI 最终回复: "现在是北京时间 2024年1月27日 14:30:45"
 ```
@@ -563,8 +585,8 @@ app.post('/chat', async (req, res) => {
   })
   const data = await response.json()
 
-  if (data.function_call) {
-    if (data.function_call.name === 'getTime') {
+  if (data.tool_calls && data.tool_calls.length > 0) {
+    if (data.tool_calls[0].function.name === 'getTime') {
       const result = getTime()
       // ... 继续处理
     }
@@ -588,15 +610,15 @@ Controller → Validator → Service → Adapter → Executor
 ### 第一层:流程理解
 
 - [ ] 理解 AI-backend 的完整调用链路
-- [ ] 知道 function_call 在哪个环节返回
+- [ ] 知道 tool_calls 在哪个环节返回
 - [ ] 理解为什么需要两次 AI 调用
 - [ ] 知道如何将函数结果返回给 AI
 
 ### 第二层:代码实现
 
 - [ ] 实现了 FunctionExecutor 类
-- [ ] 在 Controller 中添加了 function_call 处理
-- [ ] 更新了 Validator 支持 functions 参数
+- [ ] 在 Controller 中添加了 tool_calls 处理
+- [ ] 更新了 Validator 支持 tools 参数
 - [ ] 在应用启动时注册了函数
 
 ### 第三层:测试验证

@@ -36,15 +36,15 @@ AI-backend/
 │   ├── controllers/
 │   │   └── chat.controller.js   # ✓ 已支持 Function Calling
 │   ├── services/
-│   │   └── ai.service.js        # ✓ 已支持 functions 参数
+│   │   └── ai.service.js        # ✓ 已支持 tools 参数
 │   ├── adapters/
-│   │   ├── deepseek.adapter.js  # ✓ 已支持 functions
-│   │   └── openai.adapter.js    # ✓ 已支持 functions
+│   │   ├── deepseek.adapter.js  # ✓ 已支持 tools
+│   │   └── openai.adapter.js    # ✓ 已支持 tools
 │   ├── utils/
 │   │   ├── functionExecutor.js  # ✓ 已实现
 │   │   └── logger.js            # ✓ 完整日志
 │   └── validators/
-│       └── chatValidator.js     # ✓ 已支持 functions 验证
+│       └── chatValidator.js     # ✓ 已支持 tools 验证
 │
 └── server.js                     # 应用入口
 
@@ -63,7 +63,7 @@ AI-backend/
 │      POST /api/chat                                         │
 │      {                                                      │
 │        messages: [{ role: "user", content: "北京天气?" }],  │
-│        functions: [getWeatherSchema]                       │
+│        tools: [{ type: "function", function: getWeatherSchema }] │
 │      }                                                      │
 │      ↓                                                      │
 │   2. ChatController.chat()                                  │
@@ -73,19 +73,23 @@ AI-backend/
 │   3. AIService.chat()                                       │
 │      - 获取 provider (deepseek/openai)                      │
 │      - factory.get(provider)                               │
-│      - adapter.chat(messages, { functions })               │
+│      - adapter.chat(messages, { tools })                   │
 │      ↓                                                      │
 │   4. DeepSeekAdapter.chat()                                 │
 │      - 格式化 messages                                       │
 │      - 调用 DeepSeek API                                     │
 │      - 格式化响应                                            │
 │      ↓                                                      │
-│   5. AI 返回 function_call                                  │
+│   5. AI 返回 tool_calls                                     │
 │      {                                                      │
-│        function_call: {                                    │
-│          name: "getWeather",                               │
-│          arguments: '{"city":"北京"}'                       │
-│        }                                                   │
+│        tool_calls: [{                                      │
+│          id: "call_abc123",                                │
+│          type: "function",                                 │
+│          function: {                                       │
+│            name: "getWeather",                             │
+│            arguments: '{"city":"北京"}'                     │
+│          }                                                 │
+│        }]                                                  │
 │      }                                                      │
 │      ↓                                                      │
 │   6. ChatController 解析并执行                               │
@@ -93,10 +97,12 @@ AI-backend/
 │      - [Zod 验证参数]                                        │
 │      - 执行函数 → 返回天气数据                               │
 │      ↓                                                      │
-│   7. 添加 function 消息,再次调用 AI                          │
+│   7. 添加 tool 消息,再次调用 AI                              │
+│      messages.push({ role: "assistant", content: null,    │
+│        tool_calls: result.tool_calls })                    │
 │      messages.push({                                       │
-│        role: "function",                                   │
-│        name: "getWeather",                                 │
+│        role: "tool",                                       │
+│        tool_call_id: "call_abc123",                        │
 │        content: JSON.stringify(weatherData)                │
 │      })                                                    │
 │      ↓                                                      │
@@ -377,19 +383,22 @@ Content-Type: application/json
     { "role": "user", "content": "北京今天天气怎么样?" }
   ],
   "provider": "deepseek",
-  "functions": [
+  "tools": [
     {
-      "name": "getWeather",
-      "description": "获取指定城市的实时天气信息",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "city": {
-            "type": "string",
-            "description": "城市名称"
-          }
-        },
-        "required": ["city"]
+      "type": "function",
+      "function": {
+        "name": "getWeather",
+        "description": "获取指定城市的实时天气信息",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string",
+              "description": "城市名称"
+            }
+          },
+          "required": ["city"]
+        }
       }
     }
   ]
@@ -404,16 +413,19 @@ Content-Type: application/json
     { "role": "user", "content": "上海和深圳哪里更热?" }
   ],
   "provider": "deepseek",
-  "functions": [
+  "tools": [
     {
-      "name": "getWeather",
-      "description": "获取指定城市的实时天气信息",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "city": { "type": "string" }
-        },
-        "required": ["city"]
+      "type": "function",
+      "function": {
+        "name": "getWeather",
+        "description": "获取指定城市的实时天气信息",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": { "type": "string" }
+          },
+          "required": ["city"]
+        }
       }
     }
   ]
@@ -427,16 +439,19 @@ Content-Type: application/json
   "messages": [
     { "role": "user", "content": "火星的天气如何?" }
   ],
-  "functions": [
+  "tools": [
     {
-      "name": "getWeather",
-      "description": "获取指定城市的实时天气信息",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "city": { "type": "string" }
-        },
-        "required": ["city"]
+      "type": "function",
+      "function": {
+        "name": "getWeather",
+        "description": "获取指定城市的实时天气信息",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": { "type": "string" }
+          },
+          "required": ["city"]
+        }
       }
     }
   ]
@@ -448,7 +463,7 @@ Content-Type: application/json
 **测试 1 的完整流程**:
 
 ```json
-// 1. AI 返回 function_call
+// 1. AI 调用 tool (getWeather),执行后返回最终结果
 {
   "status": "success",
   "data": {
@@ -509,14 +524,17 @@ async function chat(userMessage) {
     const response = await client.chat.completions.create({
       model: config.ai.deepseek.model,
       messages: messages,
-      functions: [getWeatherSchema],
+      tools: [{ type: 'function', function: getWeatherSchema }],
+      tool_choice: 'auto',
     })
 
     const assistantMessage = response.choices[0].message
 
     // 判断是否需要调用函数
-    if (assistantMessage.function_call) {
-      const { name, arguments: args } = assistantMessage.function_call
+    if (assistantMessage.tool_calls && assistantMessage.tool_calls.length > 0) {
+      const toolCall = assistantMessage.tool_calls[0]
+      const name = toolCall.function.name
+      const args = toolCall.function.arguments
 
       console.log(`\n→ AI 决定调用函数: ${name}`)
       console.log(`→ 参数: ${args}`)
@@ -527,13 +545,13 @@ async function chat(userMessage) {
         const result = getWeather(params)
         console.log(`→ 执行结果:`, result)
 
-        // 添加 AI 的函数调用消息
+        // 添加 AI 的 tool_calls 消息
         messages.push(assistantMessage)
 
-        // 添加函数执行结果
+        // 添加函数执行结果 (role: "tool", 携带 tool_call_id)
         messages.push({
-          role: 'function',
-          name: name,
+          role: 'tool',
+          tool_call_id: toolCall.id,
           content: JSON.stringify(result, null, 2),
         })
 
@@ -553,8 +571,8 @@ async function chat(userMessage) {
         // 告诉 AI 函数执行失败
         messages.push(assistantMessage)
         messages.push({
-          role: 'function',
-          name: name,
+          role: 'tool',
+          tool_call_id: toolCall.id,
           content: JSON.stringify({ error: error.message }),
         })
 
@@ -876,7 +894,7 @@ async function getWeatherFromAPI(city) {
 
 ```javascript
 // Controller 中的 while 循环可以处理多次函数调用
-while (result.function_call) {
+while (result.tool_calls && result.tool_calls.length > 0) {
   // 执行函数
   // 添加到 messages
   // 再次调用 AI
@@ -889,16 +907,16 @@ while (result.function_call) {
 **答**: 添加计数器:
 
 ```javascript
-let functionCallCount = 0
-const MAX_FUNCTION_CALLS = 5
+let toolCallCount = 0
+const MAX_TOOL_CALLS = 5
 
-while (result.function_call && functionCallCount < MAX_FUNCTION_CALLS) {
-  functionCallCount++
+while (result.tool_calls && result.tool_calls.length > 0 && toolCallCount < MAX_TOOL_CALLS) {
+  toolCallCount++
   // ... 执行函数
 }
 
-if (functionCallCount >= MAX_FUNCTION_CALLS) {
-  logger.warn('Function call limit reached')
+if (toolCallCount >= MAX_TOOL_CALLS) {
+  logger.warn('Tool call limit reached')
   throw new Error('函数调用次数过多')
 }
 ```
