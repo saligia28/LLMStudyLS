@@ -1,5 +1,7 @@
 # Step 94: vLLM 高性能推理｜研究 tensor parallel / paged attention
 
+> **定位**：Week 14 属于进阶选修，服务于高并发部署方向。这里重点是理解系统原理，不要求你暂停 DeepSeek 主线去先做部署。
+
 ## 学习目标
 
 理解 vLLM 的两个核心技术：PagedAttention 和 Tensor Parallelism，这是它相对于其他推理框架建立性能优势的根本原因。

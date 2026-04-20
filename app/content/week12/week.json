@@ -1,6 +1,6 @@
 {
   "id": "week12",
-  "title": "Week 12: 应用落地",
+  "title": "Week 12: 应用落地（DeepSeek + 本地 Embedding）",
   "description": "将 RAG Pipeline 封装成完整的 web 应用，从文件上传界面、后端处理到前端问答与来源展示，逐步构建一个可交付的文档问答小产品。",
   "order": 12,
   "steps": [
@@ -28,7 +28,7 @@
       "id": "step80",
       "order": 80,
       "title": "加入 embedding 存储",
-      "description": "将 chunking 输出接入 embedding pipeline，存储向量索引，并在文件变更时支持重建索引。",
+      "description": "将 chunking 输出接入本地 embedding pipeline，存储向量索引，并在文件变更时支持重建索引。",
       "docFile": "step80.md",
       "codeDir": "embed-store",
       "canManual": false,
@@ -58,7 +58,7 @@
       "id": "step83",
       "order": 83,
       "title": "打包成 web 小产品",
-      "description": "梳理完整应用架构，加入环境变量配置、健康检查与 npm 脚本，使产品可一键部署。",
+      "description": "梳理完整应用架构，明确生成链与 embedding 链配置，加入健康检查与 npm 脚本，使产品可一键部署。",
       "docFile": "step83.md",
       "codeDir": "packaging",
       "canManual": false,

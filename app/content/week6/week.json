@@ -1,13 +1,13 @@
 {
   "id": "week6",
   "title": "Week 6: ReAct 多步 Agent",
-  "description": "学习 ReAct 推理与行动循环，构建具备多步决策、工具调用与任务控制能力的 Agent。",
+  "description": "学习 ReAct 风格的多步 Agent，把计划状态、工具动作与观察结果串成可控循环，构建具备多步决策与任务控制能力的 Agent。",
   "order": 6,
   "steps": [
     {
       "id": "step36",
-      "title": "理解 ReAct（思维链 + 行动）模式",
-      "description": "理解 ReAct 如何把 Thought、Action、Observation 串成循环，并区分它与普通 function calling 的能力边界。",
+      "title": "理解 ReAct（计划状态 + 行动循环）模式",
+      "description": "理解 ReAct 如何把计划状态、工具动作与观察结果串成循环，并区分它与普通 function calling 的能力边界。",
       "order": 36,
       "docFile": "step36.md",
       "codeDir": "react-basics",
@@ -21,7 +21,7 @@
     {
       "id": "step37",
       "title": "实现 action → observation → next action 循环",
-      "description": "实现一个最小 ReAct runner，把模型输出、工具调用和 Observation 回写成可持续推进的多轮循环。",
+      "description": "实现一个最小 ReAct runner，把模型输出、工具调用和 observation 回写成可持续推进的多轮循环。",
       "order": 37,
       "docFile": "step37.md",
       "codeDir": "react-loop",
@@ -35,7 +35,7 @@
     {
       "id": "step38",
       "title": "构建一个能自动搜索 + 再处理的 Agent",
-      "description": "设计先搜索、再综合的两阶段 Agent，让搜索结果成为 Observation，再驱动后续处理与答案生成。",
+      "description": "设计先搜索、再综合的两阶段 Agent，让搜索结果成为 observation，再驱动后续处理与答案生成。",
       "order": 38,
       "docFile": "step38.md",
       "codeDir": "search-agent",

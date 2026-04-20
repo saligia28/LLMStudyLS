@@ -1,7 +1,7 @@
 {
   "id": "week9",
-  "title": "Week 9: Embedding + 向量存储",
-  "description": "围绕 embedding 表示学习、向量相似度、embedding API、向量库存储、search 检索、阈值过滤、服务封装和 demo 数据准备，建立一条可落地的语义检索链路。",
+  "title": "Week 9: 本地 Embedding + 向量存储",
+  "description": "围绕本地 embedding 表示学习、向量相似度、向量库存储、search 检索、阈值过滤、服务封装和 demo 数据准备，建立 DeepSeek 生成主线下可落地的语义检索链路。",
   "order": 9,
   "steps": [
     {
@@ -20,8 +20,8 @@
     },
     {
       "id": "step58",
-      "title": "用 OpenAI/DeepSeek 做 embedding",
-      "description": "学习 OpenAI/DeepSeek embedding API 的输入输出、批量调用和结果组织方式，打通文本向量化的第一步。",
+      "title": "用本地 OpenAI-compatible 服务做 embedding",
+      "description": "学习本地 OpenAI-compatible embedding 服务的输入输出、批量调用和结果组织方式，并与 DeepSeek 生成链路分层配置。",
       "docFile": "step58.md",
       "codeDir": "embedding-api",
       "order": 58,
@@ -29,7 +29,7 @@
       "tags": [
         "API",
         "Embedding",
-        "模型"
+        "本地模型"
       ]
     },
     {

@@ -1,14 +1,14 @@
 {
   "id": "week13",
-  "title": "Week 13: Ollama 入门",
-  "description": "在本地使用 Ollama 运行开源模型，从安装配置、API 调用、流式输出到多模型对比与性能测试，建立本地 LLM 的完整使用链路。",
+  "title": "Week 13: Ollama 入门（进阶选修）",
+  "description": "作为 DeepSeek 主线之外的进阶选修，在本地使用 Ollama 运行开源模型，从安装配置、API 调用、流式输出到多模型对比与性能测试，建立本地 LLM 的完整使用链路。",
   "order": 13,
   "steps": [
     {
       "id": "step85",
       "order": 85,
       "title": "安装 Ollama",
-      "description": "了解 Ollama 的定位与架构，完成 Mac/Linux/Windows 三平台安装，掌握 daemon 管理与基本 CLI 操作，完成第一次模型拉取。",
+      "description": "了解 Ollama 的定位与架构，完成 Mac/Linux/Windows 三平台安装，掌握 daemon 管理与基本 CLI 操作，建立本地模型选修路径。",
       "docFile": "step85.md",
       "codeDir": "ollama-setup",
       "canManual": false,
@@ -17,18 +17,18 @@
     {
       "id": "step86",
       "order": 86,
-      "title": "运行 llama3 / qwen2 模型",
-      "description": "拉取并运行 llama3:8b 与 qwen2:7b，在终端中交互对话，理解 GGUF 格式与模型卡片，对比两个模型在中文任务上的表现。",
+      "title": "运行一个英文模型和一个中文模型",
+      "description": "拉取并运行一个英文模型和一个中文模型，在终端中交互对话，理解 GGUF 格式、模型卡片与本地模型选型方法。",
       "docFile": "step86.md",
       "codeDir": "ollama-models",
       "canManual": false,
-      "tags": ["llama3", "qwen2", "GGUF", "模型对比"]
+      "tags": ["英文模型", "中文模型", "GGUF", "模型对比"]
     },
     {
       "id": "step87",
       "order": 87,
       "title": "写一个 Ollama 请求脚本",
-      "description": "熟悉 Ollama REST API（端口 11434），用 Node.js fetch 调用 /api/chat 与 /api/generate，并实现一个兼容 OpenAI 格式的适配器。",
+      "description": "熟悉 Ollama REST API（端口 11434），用 Node.js fetch 调用 /api/chat 与 /api/generate，并实现一个兼容 OpenAI 格式的本地适配器。",
       "docFile": "step87.md",
       "codeDir": "ollama-client",
       "canManual": false,
@@ -48,7 +48,7 @@
       "id": "step89",
       "order": 89,
       "title": "测试不同模型大小差异",
-      "description": "拉取 1B、3B、8B 三个尺寸的模型，设计统一测试题组，对比回答质量、推理速度与内存占用，理解参数量与实际效果的权衡。",
+      "description": "拉取轻量、中量、主力三个尺寸的模型，设计统一测试题组，对比回答质量、推理速度与内存占用，理解参数量与实际效果的权衡。",
       "docFile": "step89.md",
       "codeDir": "model-comparison",
       "canManual": false,
@@ -68,7 +68,7 @@
       "id": "step91",
       "order": 91,
       "title": "整理笔记",
-      "description": "全面总结 Ollama 的能力边界，对比 Ollama / OpenAI API / vLLM 的适用场景，理解 Modelfile 自定义机制，并预览 Week 14 的 vLLM 生产级推理。",
+      "description": "全面总结 Ollama 的能力边界，对比 Ollama / DeepSeek / vLLM 的适用场景，理解 Modelfile 自定义机制，并预览 Week 14 的 vLLM 进阶部署。",
       "docFile": "step91.md",
       "codeDir": "week13-summary",
       "canManual": false,

@@ -1,5 +1,7 @@
 # Step 92: vLLM 高性能推理｜安装 vLLM
 
+> **定位**：Week 14 属于进阶选修，服务于高并发部署方向，不是继续学习 DeepSeek 主线的前置条件。下文版本号、模型 ID 与安装命令仅作方法示例，请以 vLLM 官方当前稳定版本和官方文档为准。
+
 ## 学习目标
 
 vLLM 是目前生产级 LLM 推理领域最受关注的开源框架之一。这一节我们先把它装起来，然后理解它为什么比朴素 Transformers 推理快。
@@ -155,7 +157,7 @@ vLLM import OK
 
 ```bash
 python -c "import vllm; print(vllm.__version__)"
-# 例如: 0.4.2
+# 例如: 0.x
 
 python -c "import torch; print(torch.cuda.is_available(), torch.version.cuda)"
 # 期望: True 12.1
@@ -356,7 +358,7 @@ Python 3.11: OK
 PyTorch 2.3.0: OK
 CUDA 可用: OK (12.1)
   GPU 0: NVIDIA A100-SXM4-80GB (79.2 GB)
-vLLM 0.4.2: OK
+vLLM 0.x: OK
 ==================================================
 所有检查通过，可以开始使用 vLLM
 ```

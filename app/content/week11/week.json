@@ -1,14 +1,14 @@
 {
   "id": "week11",
-  "title": "Week 11: RAG Pipeline",
-  "description": "整合 chunk、embedding、向量存储与检索，构建端到端的 RAG 流水线，逐步加入 rerank、query 重写、来源引用与缓存策略。",
+  "title": "Week 11: RAG Pipeline（DeepSeek 生成 + 本地 Embedding）",
+  "description": "整合 chunk、本地 embedding、向量存储与 DeepSeek 生成，构建端到端的 RAG 流水线，逐步加入 rerank、query 重写、来源引用与缓存策略。",
   "order": 11,
   "steps": [
     {
       "id": "step71",
       "order": 71,
       "title": "整合 Pipeline（chunk → embed → store → search）",
-      "description": "将 chunk、embedding、向量存储与检索整合为一个可复用的 RagPipeline 类，理解 ingest 与 query 两条主干流程。",
+      "description": "将 chunk、本地 embedding、向量存储与 DeepSeek 生成整合为一个可复用的 RagPipeline 类，理解 ingest 与 query 两条主干流程。",
       "docFile": "step71.md",
       "codeDir": "rag-pipeline",
       "canManual": false,
@@ -58,7 +58,7 @@
       "id": "step76",
       "order": 76,
       "title": "加入缓存策略",
-      "description": "为 embedding 和检索结果加入内存与文件级缓存，并实现基于语义相似度的查询去重，降低 API 调用成本。",
+      "description": "为本地 embedding 和检索结果加入内存与文件级缓存，并实现基于语义相似度的查询去重，降低主链路成本。",
       "docFile": "step76.md",
       "codeDir": "rag-cache",
       "canManual": false,

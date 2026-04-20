@@ -1,7 +1,7 @@
 {
   "id": "week15",
-  "title": "Week 15: 模型量化",
-  "description": "从量化原理（int8/int4/GPTQ/AWQ）到量化实验、速度与精度评估、多模型对比、动态切换，系统掌握大模型量化的工程实践。",
+  "title": "Week 15: 模型量化（进阶选修）",
+  "description": "作为 DeepSeek 主线之外的进阶选修，从量化原理（int8/int4/GPTQ/AWQ）到量化实验、速度与精度评估、多模型对比、动态切换，系统掌握大模型量化的工程实践。",
   "order": 15,
   "steps": [
     {
@@ -48,7 +48,7 @@
       "id": "step103",
       "order": 103,
       "title": "加入量化模型切换",
-      "description": "在 Node.js 后端设计模型适配器工厂，支持 DeepSeek API、Ollama 本地模型、vLLM 服务的运行时切换，并实现降级 fallback 策略。",
+      "description": "在 Node.js 后端设计 DeepSeek-first 的模型适配器工厂，支持 DeepSeek API、Ollama 本地模型、vLLM 服务的运行时切换，并实现降级 fallback 策略。",
       "docFile": "step103.md",
       "codeDir": "model-switcher",
       "canManual": false,
@@ -68,7 +68,7 @@
       "id": "step105",
       "order": 105,
       "title": "整理专题",
-      "description": "回顾 Week 11-15 完整学习路径，梳理 RAG Pipeline、应用落地、Ollama、vLLM、量化的技术演进，形成可复用的决策树与技术全景图。",
+      "description": "回顾 Week 11-15 完整学习路径，梳理 RAG 主线、应用落地、Ollama、vLLM、量化的技术演进，形成可复用的决策树与技术全景图。",
       "docFile": "step105.md",
       "codeDir": "summary",
       "canManual": false,

@@ -2,304 +2,225 @@
 
 ## 学习目标
 
-Step 79 把文件切成了 chunk 数组。这一节把这些 chunk 送进 embedding pipeline，存储向量，并在文件变更时支持重建索引。
+这一节要把上传后的 chunk 真正接进索引系统。
 
 完成后你应该能：
 
-1. 把 chunking 输出接入 Week 9 的 embedding 调用逻辑
-2. 在内存或简单 JSON 文件中存储向量索引
-3. 在上传流程中展示索引进度
-4. 当同名文件重新上传时，支持替换旧索引
+1. 把 chunking 输出送进本地 embedding 服务
+2. 把生成后的向量写入向量库
+3. 在文件重复上传时替换旧索引
+4. 继续保持“DeepSeek 生成 + 本地 embedding”的职责边界
 
-> **核心**：这一步是 RAG 的"入库"环节。chunk → embedding → 存储，三步之后文档才真正可被检索。
+> **本节默认能力边界**：Step 80 只处理本地 embedding 与索引入库，不调用 DeepSeek 生成模型。
 
 ---
 
-## 一、完整入库链路
+## 一、这一步到底做什么
 
 ```text
 POST /api/upload
   ↓
-multer 保存文件
+读取文档
   ↓
-readDocument()    — 读取并清理文本
+切分 chunk
   ↓
-chunkDocument()   — 切分成 chunk 数组
+调用本地 embedding 服务
   ↓
-embedChunks()     — 批量调用 embedding API
-  ↓
-vectorStore.add() — 存储 { vector, text, metadata }
-  ↓
-返回 { chunkCount, indexedAt }
+写入向量库
+```
+
+这一节是典型的“检索底座”章节，不属于聊天生成链。
+
+---
+
+## 二、推荐的 embedding 配置
+
+```bash
+EMBEDDING_BACKEND=openai-compatible
+EMBEDDING_BASE_URL=http://localhost:11434/v1
+EMBEDDING_API_KEY=ollama
+EMBEDDING_MODEL=nomic-embed-text
+EMBEDDING_BATCH_SIZE=16
+EMBEDDING_CACHE_FILE=./.cache/embeddings.json
+```
+
+和生成链保持分离：
+
+```bash
+DEEPSEEK_API_KEY=your-key
+DEEPSEEK_BASEURL=https://api.deepseek.com
+LLM_MODEL=deepseek-chat
 ```
 
 ---
 
-## 二、Embedding 批量调用
-
-### 2.1 复用 Week 9 的 embedding 函数
+## 三、补回一个更完整的 `embedder.js`
 
 ```js
 // server/services/embedder.js
 import OpenAI from 'openai'
 
-const client = new OpenAI({
-  apiKey:  process.env.DEEPSEEK_API_KEY,
-  baseURL: process.env.DEEPSEEK_BASEURL || 'https://api.deepseek.com'
+const embeddingClient = new OpenAI({
+  apiKey: process.env.EMBEDDING_API_KEY || 'local',
+  baseURL: process.env.EMBEDDING_BASE_URL,
 })
 
-const EMBED_MODEL = 'deepseek-embedding'
+const BATCH_SIZE = Number(process.env.EMBEDDING_BATCH_SIZE || 16)
 
-/**
- * 对单个文本生成 embedding 向量
- */
-export async function embedText(text) {
-  const res = await client.embeddings.create({
-    model: EMBED_MODEL,
-    input: text
-  })
-  return res.data[0].embedding
+function normalizeText(text) {
+  return text.replace(/\s+/g, ' ').trim()
 }
 
-/**
- * 批量 embedding，支持速率限制下的分批发送
- * @param {string[]} texts
- * @param {number} batchSize - 每批大小，默认 20
- * @returns {Promise<number[][]>}
- */
-export async function embedBatch(texts, batchSize = 20) {
-  const results = []
+export async function embedChunks(chunks) {
+  if (chunks.length === 0) return []
 
-  for (let i = 0; i < texts.length; i += batchSize) {
-    const batch = texts.slice(i, i + batchSize)
+  const vectors = []
 
-    const res = await client.embeddings.create({
-      model: EMBED_MODEL,
-      input: batch
+  for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
+    const batch = chunks.slice(i, i + BATCH_SIZE)
+
+    const response = await embeddingClient.embeddings.create({
+      model: process.env.EMBEDDING_MODEL,
+      input: batch.map((chunk) => normalizeText(chunk.text)),
     })
 
-    // API 返回的顺序与 input 顺序一致
-    const vectors = res.data
+    const ordered = [...response.data]
       .sort((a, b) => a.index - b.index)
-      .map(item => item.embedding)
+      .map((item) => item.embedding)
 
-    results.push(...vectors)
-
-    // 简单的速率限制缓冲（避免 429）
-    if (i + batchSize < texts.length) {
-      await sleep(200)
-    }
+    vectors.push(...ordered)
   }
 
-  return results
-}
-
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms))
+  return chunks.map((chunk, index) => ({
+    ...chunk,
+    vector: vectors[index],
+  }))
 }
 ```
 
-### 2.2 为什么要分批
+这段代码恢复的是“真实项目里最好保留”的几个点：
 
-DeepSeek 等 API 通常对单次请求的输入数量有限制（通常 20-100 条）。分批可以：
-
-1. 避免超出 API 限制导致 400 错误
-2. 在批次间加小延迟，防止触发速率限制
-3. 更容易在每批完成后更新进度
+- 分批请求
+- 输入标准化
+- 按 `index` 重新排序
 
 ---
 
-## 三、向量存储
-
-### 3.1 内存存储（开发快速原型）
+## 四、把向量存储写完整一些
 
 ```js
 // server/services/vector-store.js
-
-/**
- * 内存向量存储
- * 结构：Map<docId, { chunks: Array<{ text, vector, metadata }> }>
- *
- * 生产场景应替换为 Chroma / Qdrant / pgvector 等持久化方案。
- */
-class VectorStore {
-  constructor() {
-    this._store = new Map() // docId → { chunks, indexedAt }
-  }
-
-  /**
-   * 添加或替换一个文档的所有 chunk
-   * @param {string} docId - 文档唯一标识（通常用文件名）
-   * @param {Array<{ text: string, vector: number[], metadata: object }>} chunks
-   */
-  add(docId, chunks) {
-    this._store.set(docId, {
-      chunks,
-      indexedAt: new Date().toISOString()
-    })
-    console.log(`[VectorStore] ${docId}: ${chunks.length} chunks indexed`)
-  }
-
-  /**
-   * 删除某文档的索引
-   */
-  remove(docId) {
-    this._store.delete(docId)
-  }
-
-  /**
-   * 列出所有已索引文档
-   */
-  list() {
-    return [...this._store.entries()].map(([id, v]) => ({
-      id,
-      chunkCount: v.chunks.length,
-      indexedAt:  v.indexedAt
-    }))
-  }
-
-  /**
-   * 余弦相似度检索
-   * @param {number[]} queryVector
-   * @param {number} topK
-   * @returns {Array<{ text, score, metadata }>}
-   */
-  search(queryVector, topK = 5) {
-    const candidates = []
-
-    for (const { chunks } of this._store.values()) {
-      for (const chunk of chunks) {
-        const score = cosineSimilarity(queryVector, chunk.vector)
-        candidates.push({ text: chunk.text, score, metadata: chunk.metadata })
-      }
-    }
-
-    return candidates
-      .sort((a, b) => b.score - a.score)
-      .slice(0, topK)
-  }
-
-  /**
-   * 返回已索引的 chunk 总数（用于健康检查）
-   */
-  get totalChunks() {
-    let count = 0
-    for (const { chunks } of this._store.values()) count += chunks.length
-    return count
-  }
-}
-
 function cosineSimilarity(a, b) {
-  let dot = 0, normA = 0, normB = 0
-  for (let i = 0; i < a.length; i++) {
-    dot   += a[i] * b[i]
+  let dot = 0
+  let normA = 0
+  let normB = 0
+
+  for (let i = 0; i < a.length; i += 1) {
+    dot += a[i] * b[i]
     normA += a[i] * a[i]
     normB += b[i] * b[i]
   }
+
   if (normA === 0 || normB === 0) return 0
   return dot / (Math.sqrt(normA) * Math.sqrt(normB))
 }
 
-// 单例导出，整个进程共享同一个存储
+class VectorStore {
+  constructor() {
+    this.docs = new Map()
+  }
+
+  replaceDocument(docId, records) {
+    this.docs.set(docId, {
+      indexedAt: new Date().toISOString(),
+      records,
+    })
+  }
+
+  removeDocument(docId) {
+    this.docs.delete(docId)
+  }
+
+  listDocuments() {
+    return [...this.docs.entries()].map(([docId, value]) => ({
+      docId,
+      indexedAt: value.indexedAt,
+      chunkCount: value.records.length,
+    }))
+  }
+
+  search(queryVector, topK = 5) {
+    const hits = []
+
+    for (const [docId, value] of this.docs.entries()) {
+      for (const record of value.records) {
+        hits.push({
+          ...record,
+          docId,
+          score: cosineSimilarity(queryVector, record.vector),
+        })
+      }
+    }
+
+    return hits
+      .sort((a, b) => b.score - a.score)
+      .slice(0, topK)
+  }
+
+  get totalChunks() {
+    let count = 0
+    for (const value of this.docs.values()) {
+      count += value.records.length
+    }
+    return count
+  }
+}
+
 export const vectorStore = new VectorStore()
 ```
 
-### 3.2 持久化到 JSON 文件（可选升级）
-
-内存存储在服务重启后丢失索引。如果需要持久化，可以把数据序列化到 JSON：
-
-```js
-// server/services/vector-store-persistent.js
-import fs from 'fs/promises'
-
-const INDEX_FILE = './data/vector-index.json'
-
-class PersistentVectorStore {
-  constructor() {
-    this._store = new Map()
-    this._loaded = false
-  }
-
-  async init() {
-    if (this._loaded) return
-    try {
-      const raw  = await fs.readFile(INDEX_FILE, 'utf-8')
-      const data = JSON.parse(raw)
-      for (const [id, v] of Object.entries(data)) {
-        this._store.set(id, v)
-      }
-      console.log(`[VectorStore] 从磁盘加载 ${this._store.size} 个文档索引`)
-    } catch {
-      // 文件不存在时忽略
-    }
-    this._loaded = true
-  }
-
-  async save() {
-    const obj = Object.fromEntries(this._store)
-    await fs.mkdir('./data', { recursive: true })
-    await fs.writeFile(INDEX_FILE, JSON.stringify(obj), 'utf-8')
-  }
-
-  async add(docId, chunks) {
-    await this.init()
-    this._store.set(docId, { chunks, indexedAt: new Date().toISOString() })
-    await this.save()
-  }
-
-  // search / list / remove 与内存版相同...
-}
-```
-
-> 注意：向量数据是浮点数组，JSON 序列化后体积会膨胀约 3-4 倍。大规模场景请使用 Chroma、Qdrant 或 SQLite + sqlite-vss。
+`replaceDocument()` 这一步要保留，因为它正好对应“同名文件重新上传时替换旧索引”的用户体验。
 
 ---
 
-## 四、把入库逻辑整合进上传路由
-
-### 4.1 新建索引服务
+## 五、补回一个可直接复用的 `indexer.js`
 
 ```js
 // server/services/indexer.js
-import path from 'path'
-import { embedBatch } from './embedder.js'
+import { embedChunks } from './embedder.js'
 import { vectorStore } from './vector-store.js'
 
-/**
- * 对 chunk 数组做 embedding 并存入向量库
- * @param {string} docId         - 文档唯一 ID（文件名）
- * @param {string[]} chunks      - chunk 文本数组
- * @param {object} baseMeta      - 基础 metadata（filename、uploadedAt 等）
- * @param {function} [onProgress] - 进度回调 (indexed, total) => void
- */
-export async function indexDocument(docId, chunks, baseMeta = {}, onProgress) {
-  const texts   = chunks
-  const vectors = await embedBatch(texts)
+export async function indexDocument({ docId, chunks, metadata = {} }) {
+  const embeddedChunks = await embedChunks(chunks)
 
-  const entries = vectors.map((vector, i) => ({
-    text: texts[i],
-    vector,
+  const records = embeddedChunks.map((chunk, index) => ({
+    id: `${docId}:${index}`,
+    text: chunk.text,
+    vector: chunk.vector,
     metadata: {
-      ...baseMeta,
-      chunkIndex: i,
-      chunkTotal: chunks.length
-    }
+      ...metadata,
+      ...chunk.metadata,
+      chunkIndex: index,
+    },
   }))
 
-  vectorStore.add(docId, entries)
+  vectorStore.replaceDocument(docId, records)
 
-  if (onProgress) onProgress(entries.length, entries.length)
-
-  return entries.length
+  return {
+    docId,
+    chunkCount: records.length,
+    indexedAt: new Date().toISOString(),
+  }
 }
 ```
 
-### 4.2 更新上传路由
+---
+
+## 六、把上传路由接起来
 
 ```js
-// server/routes/upload.js（更新版）
+// server/routes/upload.js
 import express from 'express'
-import path from 'path'
 import fs from 'fs/promises'
 import { upload } from '../middleware/upload.js'
 import { readDocument } from '../services/document-reader.js'
@@ -308,78 +229,57 @@ import { indexDocument } from '../services/indexer.js'
 
 const router = express.Router()
 
-router.post(
-  '/upload',
-  upload.array('document', 10),
-  async (req, res) => {
-    if (!req.files || req.files.length === 0) {
-      return res.status(400).json({ error: '没有收到文件' })
-    }
-
-    const results = []
-
-    for (const file of req.files) {
-      const ext    = path.extname(file.originalname).toLowerCase()
-      const docId  = file.originalname // 用原始文件名作为文档 ID
-
-      try {
-        // 1. 读取并预处理文本
-        const text = await readDocument(file.path, file.originalname)
-
-        // 2. Chunking
-        const chunks = chunkDocument(text, ext)
-
-        // 3. Embedding + 存储（同名文件会替换旧索引）
-        const indexed = await indexDocument(
-          docId,
-          chunks,
-          { filename: file.originalname, uploadedAt: new Date().toISOString() }
-        )
-
-        results.push({
-          filename:   file.originalname,
-          ok:         true,
-          chunkCount: indexed,
-          charCount:  text.length
-        })
-      } catch (err) {
-        console.error(`[upload] ${file.originalname} 失败:`, err)
-        results.push({
-          filename: file.originalname,
-          ok:       false,
-          error:    err.message
-        })
-      } finally {
-        // 处理完毕后删除临时文件
-        await fs.unlink(file.path).catch(() => {})
-      }
-    }
-
-    res.json({ ok: true, results })
+router.post('/upload', upload.array('document', 10), async (req, res) => {
+  if (!req.files || req.files.length === 0) {
+    return res.status(400).json({ error: '没有收到文件' })
   }
-)
+
+  const results = []
+
+  for (const file of req.files) {
+    try {
+      const text = await readDocument(file.path, file.originalname)
+      const chunks = chunkDocument(text, file.originalname)
+      const indexed = await indexDocument({
+        docId: file.originalname,
+        chunks,
+        metadata: {
+          filename: file.originalname,
+          uploadedAt: new Date().toISOString(),
+        },
+      })
+
+      results.push({
+        filename: file.originalname,
+        ok: true,
+        chunkCount: indexed.chunkCount,
+        indexedAt: indexed.indexedAt,
+      })
+    } catch (error) {
+      results.push({
+        filename: file.originalname,
+        ok: false,
+        error: error.message,
+      })
+    } finally {
+      await fs.unlink(file.path).catch(() => {})
+    }
+  }
+
+  return res.json({
+    ok: true,
+    results,
+  })
+})
 
 export default router
 ```
 
----
-
-## 五、处理同名文件重新上传
-
-当用户上传同名文件时，应替换旧索引而不是追加：
-
-```js
-// vectorStore.add() 已经用 Map.set() 实现替换
-// 只需在路由里统一用 filename 作为 docId 即可
-
-// 如果想提示用户"已替换旧版本"：
-const existed = vectorStore.list().some(d => d.id === docId)
-// 在返回结果里加上 replaced: existed
-```
+这里把长示例补回来，是因为很多同学第一次把 RAG 接成产品，卡住的地方就是“知道服务模块，但不知道怎么把路由串起来”。
 
 ---
 
-## 六、健康检查与索引状态
+## 七、加一个健康检查接口
 
 ```js
 // server/routes/health.js
@@ -389,47 +289,28 @@ import { vectorStore } from '../services/vector-store.js'
 const router = express.Router()
 
 router.get('/health', (req, res) => {
-  const docs = vectorStore.list()
-  res.json({
-    status:      'ok',
-    docCount:    docs.length,
+  return res.json({
+    status: 'ok',
+    docCount: vectorStore.listDocuments().length,
     totalChunks: vectorStore.totalChunks,
-    docs:        docs.map(d => ({ id: d.id, chunkCount: d.chunkCount, indexedAt: d.indexedAt }))
+    docs: vectorStore.listDocuments(),
   })
 })
 
 export default router
 ```
 
-```bash
-curl http://localhost:3001/api/health
-# 期望：
-# {
-#   "status": "ok",
-#   "docCount": 2,
-#   "totalChunks": 34,
-#   "docs": [...]
-# }
-```
+这一步虽然简单，但排查“为什么上传了文档却搜不到”时非常有用。
 
 ---
 
-## 七、前端展示索引结果
+## 八、小结
 
-在 Step 78 的上传 UI 里，上传完成后可以展示 chunk 数量：
+这一节最重要的是把职责立稳：
 
-```js
-// 更新 upload.js 中的 setFileStatus 调用
-const res = await uploadFile(file) // 后端现在返回 chunkCount
-setFileStatus(name, 'done', `完成 · ${res.chunkCount ?? 0} chunks 已索引`)
-```
+1. Step 80 负责本地 embedding 入库
+2. DeepSeek 生成链不参与这一节
+3. 向量记录里要保留清晰 metadata，方便后面引用和调试
+4. 路由、索引器、向量存储这三层都值得保留完整示例
 
----
-
-## 小结
-
-1. 批量 embedding 要按合理批次（20-100）发送，并在批次间加小延迟，防止 API 速率限制。
-2. 内存向量存储适合开发和演示，生产环境应使用支持持久化和 ANN 检索的向量数据库。
-3. 用文件名作为 `docId` 并在 `add()` 时覆盖，可以自然实现"同名文件替换旧索引"的语义。
-4. 余弦相似度计算是向量检索的核心，理解它比调用库函数更重要。
-5. 健康检查端点让你随时验证索引状态，是调试和运维的好帮手。
+下一节我们再把这些索引接到前端问答体验里。

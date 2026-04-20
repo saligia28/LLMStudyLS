@@ -109,7 +109,7 @@ export class EmbeddingService {
 
 这样做的意义是：
 
-- provider 可以是 OpenAI，也可以是 DeepSeek
+- provider 可以是本地 OpenAI-compatible embedding 服务
 - vectorStore 可以是 Chroma，也可以是本地文件索引
 - logger 可以是控制台，也可以是正式日志系统
 

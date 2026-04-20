@@ -2,561 +2,166 @@
 
 ## 学习目标
 
-这一节要解决一个真实的工程问题：**AI 调用函数之后，还想继续调用另一个函数，怎么办？**
-
-以及一个更隐蔽的问题：**流式（stream）模式下，Function Calling 的参数是逐 token 输出的，该怎么处理？**
+这一节回答的核心问题是：**如果模型一次回答里还想继续调用工具，链路该怎么继续推进？**
 
 完成后你应该能：
 
-1. 把 `if (result.tool_calls)` 改成正确的 `while` 循环，支持 AI 连续调用多个函数
-2. 理解 stream 模式和普通模式在 Function Calling 处理上的本质差异
-3. 给 `chatStream` 补上 Function Calling 支持
-4. 加入循环次数限制，防止 AI 陷入无限调用
+1. 把单次 `if` 处理升级成 `while` 循环
+2. 理解多轮工具调用的停止条件
+3. 看懂 stream 模式下 `tool_calls` 参数为什么会碎片化
+4. 给工具调用链路加上循环保护
 
-> **当前项目状态**：`chat.controller.js` 里用的是 `if`，只处理一次函数调用。`chatStream` 完全没有 function calling 逻辑。本节把这两处都补全。
+> **本节默认模型**：`deepseek-chat`。工具循环与流式工具调用都继续使用它。
 
 ---
 
-## 一、为什么 `if` 不够用
+## 一、为什么单次 `if` 不够
 
-### 1.1 当前实现的局限
+上一节的最小链路只处理一次工具调用，但真实问题可能是这样的：
 
-打开 `src/controllers/chat.controller.js`，你会看到：
+- “先查上海时间，再算 19 + 23”
+- “先搜资料，再总结”
+- “先查天气，再判断是否适合出门”
+
+这类问题的特点是：**模型收到第一个工具结果之后，还可能继续调用下一个工具。**
+
+所以流程应该从：
 
 ```js
-// 当前代码 — 只处理一次 tool_calls
-if (result.tool_calls && result.tool_calls.length > 0) {
-  const toolCall = result.tool_calls[0]
-  const functionResult = functionExecutor.execute(toolCall.function.name, toolCall.function.arguments)
-  messages.push(...)      // 加入 assistant + tool 消息
-  result = await aiService.chat(messages, ...)   // 第二次调用 AI
-  // ← 结束。如果 AI 在第二次回复里还想调用函数？直接忽略了。
+if (message.tool_calls?.length) {
+  // 只处理一次
 }
 ```
 
-这在"只调用一个函数"的场景下没问题。但如果用户问：
+升级成：
 
-> "帮我算 3+5，然后告诉我现在几点"
-
-AI 可能会先调用 `sum`，拿到结果后，再调用 `getTime`，最后才给你完整回答。这种**多步函数链**用 `if` 是接不住的。
-
-### 1.2 正确的模型：循环
-
-```text
-用户消息
-   ↓
-第 1 次调用 AI
-   ├─ 返回普通文本  → 直接结束 ✓
-   └─ 返回 tool_calls
-         ↓
-      执行函数，把结果加入 messages
-         ↓
-      第 2 次调用 AI
-         ├─ 返回普通文本  → 结束 ✓
-         └─ 返回 tool_calls
-               ↓
-            再执行函数，再加入 messages
-               ↓
-            第 3 次调用 AI  ...（直到不再调用函数，或达到上限）
+```js
+while (message.tool_calls?.length) {
+  // 处理直到没有新的工具调用
+}
 ```
 
 ---
 
-## 二、改造普通 chat：`if` → `while`
-
-### 2.1 核心改动
+## 二、一个最小可用的循环版本
 
 ```js
-// src/controllers/chat.controller.js
-
-async chat(req, res) {
-  const validatedData = validateChatRequest(req.body)
-  const messages = [...validatedData.messages]
-
-  const callOptions = {
-    provider: validatedData.provider,
-    model: validatedData.model,
-    temperature: validatedData.temperature,
-    max_tokens: validatedData.maxTokens,
-    tools: validatedData.tools,  // 新版：tools 字段
-  }
-
-  // 第一次调用 AI
-  let result = await aiService.chat(messages, callOptions)
-
-  // ✅ 改成 while：AI 只要还想调用函数，就继续循环
-  const MAX_ITERATIONS = 5   // 防止无限循环
+async function runToolLoop(messages, { maxIterations = 5 } = {}) {
   let iterations = 0
 
-  while (result.tool_calls && result.tool_calls.length > 0 && iterations < MAX_ITERATIONS) {
-    iterations++
+  while (iterations < maxIterations) {
+    const response = await ask(messages)
+    const message = response.choices[0].message
 
-    // 新版：从 tool_calls[0].function 取函数名和参数
-    const toolCall = result.tool_calls[0]
-    const name = toolCall.function.name
-    const args = toolCall.function.arguments
-    logger.info(`[iteration ${iterations}] AI requested function: ${name}`, { args })
-
-    // 执行函数（executor 内部会处理 JSON 解析 + 错误）
-    let functionResult
-    try {
-      functionResult = functionExecutor.execute(name, args)
-      logger.info(`Function ${name} executed`, { result: functionResult })
-    } catch (error) {
-      logger.error(`Function ${name} failed`, { error: error.message })
-      // 把错误告诉 AI，让它自行处理（而不是直接抛出中断流程）
-      functionResult = { error: error.message }
+    if (!message.tool_calls || message.tool_calls.length === 0) {
+      return message.content || ''
     }
 
-    // 把这一轮的 assistant（带 tool_calls）+ tool 结果 加入历史
+    const toolMessages = []
+
+    for (const toolCall of message.tool_calls) {
+      const result = safeExecuteToolCall(toolCall)
+      toolMessages.push({
+        role: 'tool',
+        tool_call_id: toolCall.id,
+        content: JSON.stringify(result),
+      })
+    }
+
     messages.push({
       role: 'assistant',
-      content: null,
-      tool_calls: result.tool_calls,  // 新版：保留完整 tool_calls 数组
+      content: message.content,
+      tool_calls: message.tool_calls,
     })
-    messages.push({
-      role: 'tool',                   // 新版：role 是 "tool" 而非 "function"
-      tool_call_id: toolCall.id,      // 新版：必须带 tool_call_id
-      content: typeof functionResult === 'string'
-        ? functionResult
-        : JSON.stringify(functionResult),
-    })
+    messages.push(...toolMessages)
 
-    // 再次调用 AI（带上函数结果）
-    result = await aiService.chat(messages, callOptions)
+    iterations += 1
   }
 
-  if (iterations >= MAX_ITERATIONS) {
-    logger.warn(`Function call loop hit MAX_ITERATIONS (${MAX_ITERATIONS}), forcing stop`)
-  }
-
-  return res.json(success(result))
+  throw new Error('工具调用超过最大轮数，已主动停止')
 }
 ```
 
-### 2.2 两个关键设计决策
+这里有两个升级点：
 
-**① 函数执行错误不要直接 throw**
-
-```js
-// ❌ 这样做会中断整个请求，返回 500
-const functionResult = functionExecutor.execute(name, args)  // 如果 throw，直接崩
-
-// ✅ 捕获错误，把错误信息作为函数返回值传给 AI
-try {
-  functionResult = functionExecutor.execute(name, args)
-} catch (error) {
-  functionResult = { error: error.message }
-}
-```
-
-这样 AI 会收到 `{ error: "Function xxx not found" }`，它可以告诉用户"这个函数无法使用"，而不是你的服务直接挂掉。
-
-**② MAX_ITERATIONS 防止死循环**
-
-AI 理论上可能一直返回 `tool_calls`（比如提示词设计有问题，或模型行为异常）。加上上限是生产代码的标配。5 次通常够用，极端场景可以调高。
+1. 支持一轮里多个 `tool_calls`
+2. 支持多轮循环，直到模型不再请求工具
 
 ---
 
-## 三、Stream 模式的 Function Calling
+## 三、停止条件要从一开始就定义
 
-### 3.1 问题所在
+至少准备下面三种：
 
-打开 `src/controllers/chat.controller.js`，看 `chatStream` 方法：
+1. **没有新的 `tool_calls`**：说明可以输出最终答案
+2. **达到 `maxIterations`**：防止无限循环
+3. **出现不可恢复错误**：例如核心工具持续失败
 
-```js
-async chatStream(req, res) {
-  const validatedData = validateChatRequest(req.body)
-  const streamHandler = new StreamHandler(res)
-  const stream = await aiService.chatStream(validatedData.messages, { ... })
-  await streamHandler.handleStream(stream)
-  // ← 完全没有 function calling 处理
-}
-```
-
-`streamHandler.handleStream` 只会把 `delta.content` 里的文字 token 流式发出去。如果 AI 不返回文字，而是返回 `tool_calls`，这段代码会静默忽略。
-
-### 3.2 Stream 下 tool_calls 的特殊性
-
-在非 stream 模式，函数调用是一次性返回的：
-
-```json
-{
-  "tool_calls": [{
-    "id": "call_abc123",
-    "type": "function",
-    "function": {
-      "name": "getTime",
-      "arguments": "{\"timezone\":\"Asia/Shanghai\"}"
-    }
-  }]
-}
-```
-
-在 stream 模式，同样的内容是**逐 token 分片流出来的**：
-
-```text
-chunk 1: { "delta": { "tool_calls": [{ "index": 0, "id": "call_abc", "type": "function", "function": { "name": "getTime", "arguments": "" } }] } }
-chunk 2: { "delta": { "tool_calls": [{ "index": 0, "function": { "arguments": "{\"time" } }] } }
-chunk 3: { "delta": { "tool_calls": [{ "index": 0, "function": { "arguments": "zone\":" } }] } }
-chunk 4: { "delta": { "tool_calls": [{ "index": 0, "function": { "arguments": "\"Asia/Shanghai\"}" } }] } }
-chunk 5: { "finish_reason": "tool_calls" }
-```
-
-所以处理 stream Function Calling 的核心思路：
-
-```text
-1. 检测第一个 chunk 是否有 delta.tool_calls  → 进入"函数模式"
-2. 持续拼接后续 chunk 的 tool_calls[0].function.arguments 片段
-3. 收到 finish_reason: "tool_calls" 后，拼接完成
-4. 执行函数，拿到结果
-5. 继续用普通 chat（非 stream）让 AI 生成最终回复
-   或者再次开一个新 stream 让 AI 流式输出最终回复
-```
-
-### 3.3 改造 StreamHandler
-
-先扩展 `src/utils/streamHandler.js`，让它能收集 tool_calls：
+推荐把保护参数做成配置：
 
 ```js
-// src/utils/streamHandler.js
-
-export class StreamHandler {
-  constructor(res) {
-    this.res = res
-    this.setupHeaders()
-  }
-
-  setupHeaders() {
-    this.res.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
-    this.res.setHeader('Cache-Control', 'no-cache')
-    this.res.setHeader('Connection', 'keep-alive')
-  }
-
-  sendChunk(data) {
-    this.res.write(`data: ${JSON.stringify(data)}\n\n`)
-  }
-
-  sendDone() {
-    this.res.write('data: [DONE]\n\n')
-  }
-
-  sendError(error) {
-    this.res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`)
-  }
-
-  end() {
-    this.res.end()
-  }
-
-  /**
-   * 原来的流处理：只处理文字 token
-   */
-  async handleStream(stream) {
-    try {
-      for await (const chunk of stream) {
-        const content = chunk.choices[0]?.delta?.content
-        if (content) {
-          this.sendChunk(chunk)
-        }
-      }
-      this.sendDone()
-    } catch (error) {
-      logger.error('Stream handler error:', error)
-      this.sendError(error)
-    } finally {
-      this.end()
-    }
-  }
-
-  /**
-   * ✅ 新增：支持 Function Calling 的流处理（新版 tool_calls 格式）
-   *
-   * 返回值：
-   *   - { type: 'done' }                                  → 正常结束，纯文字回复已流出
-   *   - { type: 'tool_call', id, name, arguments }        → AI 要调用函数，调用方去执行
-   */
-  async handleStreamWithFunctionCall(stream) {
-    let toolCallId = ''
-    let toolCallName = ''
-    let toolCallArgs = ''
-    let hasToolCall = false
-
-    try {
-      for await (const chunk of stream) {
-        const choice = chunk.choices[0]
-        if (!choice) continue
-
-        const delta = choice.delta
-
-        // 检测是否是 tool_calls 模式（新版）
-        if (delta?.tool_calls && delta.tool_calls.length > 0) {
-          hasToolCall = true
-          const tc = delta.tool_calls[0]  // 取第一个工具调用的 delta
-          if (tc.id) toolCallId = tc.id
-          if (tc.function?.name) toolCallName = tc.function.name
-          if (tc.function?.arguments) toolCallArgs += tc.function.arguments
-          // tool_call 期间不向客户端发送任何内容（等函数执行完再说）
-          continue
-        }
-
-        // 普通文字 token：流式发给客户端
-        if (delta?.content) {
-          this.sendChunk(chunk)
-        }
-
-        // 检查结束原因（新版是 "tool_calls"）
-        if (choice.finish_reason === 'tool_calls') {
-          return {
-            type: 'tool_call',
-            id: toolCallId,
-            name: toolCallName,
-            arguments: toolCallArgs,
-          }
-        }
-
-        if (choice.finish_reason === 'stop') {
-          // 正常结束
-          this.sendDone()
-          return { type: 'done' }
-        }
-      }
-
-      // stream 结束但没有明确的 finish_reason
-      if (hasToolCall) {
-        return {
-          type: 'tool_call',
-          id: toolCallId,
-          name: toolCallName,
-          arguments: toolCallArgs,
-        }
-      }
-
-      this.sendDone()
-      return { type: 'done' }
-
-    } catch (error) {
-      logger.error('Stream handler error:', error)
-      this.sendError(error)
-      return { type: 'done' }
-    } finally {
-      // 注意：不在这里 end()，由 controller 决定何时关闭
-    }
-  }
+const TOOL_LOOP_CONFIG = {
+  maxIterations: 5,
+  abortOnToolError: false,
 }
-```
-
-### 3.4 改造 chatStream Controller
-
-```js
-// src/controllers/chat.controller.js
-
-async chatStream(req, res) {
-  const validatedData = validateChatRequest(req.body)
-  const messages = [...validatedData.messages]
-
-  const callOptions = {
-    provider: validatedData.provider,
-    model: validatedData.model,
-    temperature: validatedData.temperature,
-    max_tokens: validatedData.maxTokens,
-    tools: validatedData.tools,  // 新版：tools 字段
-  }
-
-  const streamHandler = new StreamHandler(res)
-  const MAX_ITERATIONS = 5
-  let iterations = 0
-
-  // ✅ 外层也是循环：AI 可能连续调用多个函数
-  while (iterations < MAX_ITERATIONS) {
-    // 开启一个新的 stream
-    const stream = await aiService.chatStream(messages, callOptions)
-    const outcome = await streamHandler.handleStreamWithFunctionCall(stream)
-
-    if (outcome.type === 'done') {
-      // 正常结束，流已经发完
-      break
-    }
-
-    if (outcome.type === 'tool_call') {  // 新版：type 是 'tool_call'
-      iterations++
-      const { id: toolCallId, name, arguments: args } = outcome
-      logger.info(`[stream iteration ${iterations}] AI requested function: ${name}`)
-
-      // 执行函数
-      let functionResult
-      try {
-        functionResult = functionExecutor.execute(name, args)
-      } catch (error) {
-        logger.error(`Function ${name} failed`, { error: error.message })
-        functionResult = { error: error.message }
-      }
-
-      // 把这一轮加入 messages（新版格式）
-      messages.push({
-        role: 'assistant',
-        content: null,
-        tool_calls: [{                    // 新版：tool_calls 数组
-          id: toolCallId,
-          type: 'function',
-          function: { name, arguments: args },
-        }],
-      })
-      messages.push({
-        role: 'tool',                     // 新版：role 是 "tool"
-        tool_call_id: toolCallId,         // 新版：必须带 tool_call_id
-        content: typeof functionResult === 'string'
-          ? functionResult
-          : JSON.stringify(functionResult),
-      })
-
-      // 继续循环，让 AI 生成下一步（可能还是 tool_calls，也可能是最终回答）
-    }
-  }
-
-  // 确保 SSE 连接关闭
-  streamHandler.end()
-}
-```
-
-### 3.5 整体流程图
-
-```text
-POST /api/chat/stream
-        ↓
-validateChatRequest
-        ↓
-aiService.chatStream(messages)   ← 第 1 次开 stream
-        ↓
-handleStreamWithFunctionCall
-  ├─ 返回 { type: 'done' }
-  │       ↓
-  │   SSE 流结束，res.end()  ✓
-  │
-  └─ 返回 { type: 'tool_call', id, name, arguments }
-          ↓
-      执行函数，得到结果
-          ↓
-      messages.push(assistant + tool)
-          ↓
-      aiService.chatStream(messages)   ← 第 2 次开 stream
-          ↓
-      handleStreamWithFunctionCall
-          ├─ 返回 { type: 'done' }  → SSE 流结束 ✓
-          └─ 返回 { type: 'tool_call' }  → 继续循环...
 ```
 
 ---
 
-## 四、普通 chat 和 stream chat 的完整对比
+## 四、stream 模式为什么更麻烦
 
-| 维度 | chat（普通） | chatStream（流式） |
-|------|-------------|------------------|
-| tool_calls 获取 | 一次性返回完整 JSON | 逐 token 拼接，需要手动收集 |
-| 中间过程展示 | 不展示 | 文字 token 实时发给客户端，tool_call 期间静默 |
-| 循环机制 | `while (result.tool_calls?.length > 0)` | `while` 内每次开新 stream |
-| 最终结束 | `res.json(success(result))` | `streamHandler.end()` |
-| 复杂度 | 较低 | 较高，需要区分 delta 类型 |
+普通模式下，模型会一次性返回完整 `tool_calls`。  
+stream 模式下，参数可能是分片吐出来的：
+
+```js
+chunk1: { delta: { tool_calls: [{ index: 0, id: 'call_1', type: 'function', function: { name: 'getTime', arguments: '' } }] } }
+chunk2: { delta: { tool_calls: [{ index: 0, function: { arguments: '{"time' } }] } }
+chunk3: { delta: { tool_calls: [{ index: 0, function: { arguments: 'zone":"Asia/Shanghai"}' } }] } }
+chunk4: { finish_reason: 'tool_calls' }
+```
+
+也就是说你不能在第一个 chunk 就 `JSON.parse()`。
 
 ---
 
-## 五、验证
+## 五、stream 模式下的拼接思路
 
-### 5.1 测试多步函数调用（普通模式）
+```js
+function mergeToolCallDelta(state, deltaToolCall) {
+  const current = state[deltaToolCall.index] || {
+    id: '',
+    type: 'function',
+    function: { name: '', arguments: '' },
+  }
 
-```http
-POST http://localhost:3000/api/chat
-Content-Type: application/json
+  if (deltaToolCall.id) current.id = deltaToolCall.id
+  if (deltaToolCall.function?.name) current.function.name = deltaToolCall.function.name
+  if (deltaToolCall.function?.arguments) {
+    current.function.arguments += deltaToolCall.function.arguments
+  }
 
-{
-  "messages": [
-    { "role": "user", "content": "帮我算 3+5，然后告诉我现在北京时间" }
-  ],
-  "tools": [
-    {
-      "type": "function",
-      "function": {
-        "name": "sum",
-        "description": "计算两个数的和",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "a": { "type": "number" },
-            "b": { "type": "number" }
-          },
-          "required": ["a", "b"]
-        }
-      }
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "getTime",
-        "description": "获取当前时间",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "timezone": { "type": "string" }
-          }
-        }
-      }
-    }
-  ]
+  state[deltaToolCall.index] = current
+  return state
 }
 ```
 
-**预期日志**：
-```
-[iteration 1] AI requested function: sum
-Function sum executed { result: 8 }
-[iteration 2] AI requested function: getTime
-Function getTime executed { result: "当前时间 (Asia/Shanghai): 2026-04-13 ..." }
-```
+最小原则是：
 
-### 5.2 测试 Stream 模式
-
-```http
-POST http://localhost:3000/api/chat/stream
-Content-Type: application/json
-
-{
-  "messages": [
-    { "role": "user", "content": "现在几点？" }
-  ],
-  "tools": [
-    {
-      "type": "function",
-      "function": {
-        "name": "getTime",
-        "description": "获取当前时间",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "timezone": { "type": "string" }
-          }
-        }
-      }
-    }
-  ]
-}
-```
-
-**预期行为**：
-- AI 先发出 `tool_calls`（stream 静默收集）
-- 执行 `getTime`，得到时间字符串
-- 重新开 stream，AI 流式输出最终回答（客户端能看到 token 逐字出现）
-
-### 5.3 检查循环限制
-
-观察日志：如果看到 `Function call loop hit MAX_ITERATIONS`，说明 AI 陷入了循环，限制生效。
+- 先按 `index` 聚合
+- 等 `finish_reason === "tool_calls"` 再当成完整数据处理
+- 最后统一进入和普通模式相同的执行循环
 
 ---
 
 ## 六、小结
 
-1. **`if` → `while`**：处理多步函数调用的核心改动，三行代码，意义重大。
-2. **MAX_ITERATIONS**：生产代码必须有上限，AI 的行为不可完全预测。
-3. **Stream 下 tool_calls 是碎片化的**：需要手动按 id + name + arguments 拼接，不能直接用。
-4. **Stream + Function Calling 的关键设计**：工具调用期间对客户端静默，拿到结果后再开新 stream 流出最终回答。
-5. **函数错误不要直接 throw**：转成 `{ error: message }` 回传给 AI，让 AI 优雅处理，服务不崩。
-6. **新旧 API 最大差异**：`functions` → `tools`（每项多一层 `{type:"function", function:{...}}`），`function_call` → `tool_calls`（数组），返回结果 `role:"function"` → `role:"tool"` 且必须带 `tool_call_id`。
+这一节真正解决的是“工具调用不是一次性行为，而是一个循环系统”。
+
+你需要记住：
+
+1. 普通模式用 `while` 驱动多轮工具调用
+2. 一轮里可能不止一个 `tool_calls`
+3. stream 模式要先拼接，再解析
+4. 循环一定要有限制，不能让模型无限打工具
+
+下一节我们把这些能力放进一个完整 demo：天气查询。

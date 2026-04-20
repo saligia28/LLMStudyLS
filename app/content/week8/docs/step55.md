@@ -58,7 +58,7 @@
 ```js
 const task = {
   id: 'task-real-001',
-  repo: 'AI-backend',
+  repo: 'current-repo',
   goal: '把验证链路整理成可审查、可回滚的真实任务',
   scope: {
     include: ['src/**', 'docs/**'],

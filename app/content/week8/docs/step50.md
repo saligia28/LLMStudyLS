@@ -31,7 +31,7 @@
 
 假设用户给出一个真实改动请求：
 
-> “把 `AI-backend` 的聊天链路重构一下，先拆出计划，再改代码，最后跑测试并给我 diff。”
+> “把当前仓库里的聊天链路重构一下，先拆出计划，再改代码，最后跑测试并给我 diff。”
 
 如果只是普通 Agent，它可能会：
 
@@ -103,7 +103,7 @@ const task = {
   id: 'task-20260410-001',
   goal: '重构 chat 路由的写入流程，加入 diff 和确认门',
   scope: {
-    repo: 'AI-backend',
+    repo: 'current-repo',
     include: ['src/routes/**', 'src/services/**'],
     exclude: ['.env', 'logs/**', 'node_modules/**'],
   },

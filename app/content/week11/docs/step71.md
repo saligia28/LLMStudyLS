@@ -2,488 +2,447 @@
 
 ## 学习目标
 
-这一节要做的是把 Week 9、10 积累的所有组件——chunking、embedding、向量存储、相似度检索——串成一个真正可运行的端到端 RAG 流水线。
+这一节要把 Week 9、10 积累的组件接成一条真正可运行的 RAG 主线。
 
 完成后你应该能：
 
-1. 描述完整 RAG Pipeline 的两条主干流程：ingest（入库）和 query（问答）
-2. 实现一个 `RagPipeline` 类，封装 chunk、embed、store、search 四个阶段
-3. 使用 DeepSeek（OpenAI-compatible）完成 embedding 和 chat 调用
-4. 运行一个从文档到问答的完整端到端示例
-5. 识别每个阶段的输入输出边界，为后续扩展打好基础
+1. 清楚区分 ingest 与 query 两条流程
+2. 用一个 `RagPipeline` 类统一管理配置和状态
+3. 明确拆分“本地 embedding”与“DeepSeek 生成”
+4. 跑通一份从文档入库到问答返回的端到端示例
 
-> Week 9 和 Week 10 分别解决了"如何表示文本"和"如何切分文本"，这一节把它们接在一起，让整条链路第一次真正跑起来。
+> **本节默认能力边界**：文档向量与查询向量由本地 OpenAI-compatible embedding 服务生成；DeepSeek 负责最终回答、query rewrite 与 rerank 等生成类能力。
 
 ---
 
-## 一、完整 RAG Pipeline 的结构
-
-先把两条主干流程的关系看清楚：
+## 一、先把两条流程拆清楚
 
 ```text
 【Ingest 入库流程】
-
-原始文档（字符串 / 文件）
+原始文档
   ↓
-Chunking（切分为小块）
+Chunking
   ↓
-Embedding（每个 chunk → 向量）
+Local Embedding
   ↓
-向量存储（保存 chunk + 向量）
+向量库存储
 
 【Query 问答流程】
-
 用户问题
   ↓
-Query Embedding（问题 → 向量）
+Query Embedding（本地）
   ↓
-向量检索（余弦相似度 → Top-K chunks）
+向量检索
   ↓
-Prompt 组装（chunks + 问题）
+Prompt 组装
   ↓
-LLM 生成（DeepSeek chat）
-  ↓
-返回答案
+DeepSeek 回答
 ```
 
-这两条流程共享同一个向量存储。Ingest 写入，Query 读出。Pipeline 就是把这两条流程封装在一个类里，统一管理状态和配置。
+从这一节开始，RAG 主线不再写成“DeepSeek 一家包办”，而是固定成：
 
-### 为什么要封装成类
-
-1. 配置（model 名、chunk 参数、Top-K）集中管理，不散落各处
-2. 向量存储在内存里生命周期清晰，不需要全局变量
-3. ingest 和 query 作为两个公开方法，边界明确
-4. 后续加 rerank、cache、citation 时，改动范围可控
+- `DeepSeek = 生成`
+- `Local Embedding = 检索底座`
 
 ---
 
-## 二、项目结构
+## 二、推荐的配置分层
 
-```text
-rag-pipeline/
-├── index.js          # 入口示例
-├── RagPipeline.js    # 核心 Pipeline 类
-├── chunker.js        # Chunking 模块
-├── embedder.js       # Embedding 模块
-├── vectorStore.js    # 向量存储模块
-└── .env              # DEEPSEEK_API_KEY
+```bash
+# 生成模型
+DEEPSEEK_API_KEY=your-key
+DEEPSEEK_BASEURL=https://api.deepseek.com
+LLM_MODEL=deepseek-chat
+
+# embedding 服务
+EMBEDDING_BACKEND=openai-compatible
+EMBEDDING_BASE_URL=http://localhost:11434/v1
+EMBEDDING_API_KEY=ollama
+EMBEDDING_MODEL=nomic-embed-text
+EMBEDDING_BATCH_SIZE=16
+
+# RAG 参数
+TOP_K=5
+SIMILARITY_THRESHOLD=0.5
+CHUNK_SIZE=800
+CHUNK_OVERLAP=160
 ```
-
-先把各个模块单独写清楚，再组装进 `RagPipeline`。
 
 ---
 
-## 三、Chunking 模块
+## 三、两个客户端分开初始化
+
+```js
+// clients.js
+import OpenAI from 'openai'
+
+export const llmClient = new OpenAI({
+  apiKey: process.env.DEEPSEEK_API_KEY,
+  baseURL: process.env.DEEPSEEK_BASEURL || 'https://api.deepseek.com',
+})
+
+export const embeddingClient = new OpenAI({
+  apiKey: process.env.EMBEDDING_API_KEY || 'local',
+  baseURL: process.env.EMBEDDING_BASE_URL,
+})
+```
+
+这样后面你想：
+
+- 换本地 embedding 模型
+- 保持 DeepSeek 生成不动
+
+都只改一侧配置。
+
+---
+
+## 四、补回一个可复用的 `chunker.js`
 
 ```js
 // chunker.js
-/**
- * 滑动窗口切分，支持 overlap
- * @param {string} text
- * @param {object} options
- * @param {number} options.chunkSize  - 每块字符数，默认 600
- * @param {number} options.overlap    - 重叠字符数，默认 100
- * @returns {Array<{text: string, index: number}>}
- */
-export function chunkText(text, { chunkSize = 600, overlap = 100 } = {}) {
+export function chunkText(text, { chunkSize = 800, overlap = 160 } = {}) {
   if (overlap >= chunkSize) {
     throw new Error('overlap 必须小于 chunkSize')
   }
 
+  const normalized = text.replace(/\r\n/g, '\n').trim()
+  if (!normalized) return []
+
   const step = chunkSize - overlap
   const chunks = []
-  let index = 0
 
-  for (let i = 0; i < text.length; i += step) {
-    const part = text.slice(i, i + chunkSize).trim()
-    if (part.length > 20) {  // 过滤过短的碎片
-      chunks.push({ text: part, index })
-      index++
-    }
-    if (i + chunkSize >= text.length) break
+  for (let start = 0, index = 0; start < normalized.length; start += step, index += 1) {
+    const raw = normalized.slice(start, start + chunkSize).trim()
+    if (!raw) continue
+
+    chunks.push({
+      index,
+      start,
+      end: Math.min(start + chunkSize, normalized.length),
+      text: raw,
+    })
+
+    if (start + chunkSize >= normalized.length) break
   }
 
   return chunks
 }
 
-/**
- * 按 Markdown 标题做语义切分，超过 maxSize 时再做长度约束
- */
-export function chunkMarkdown(markdown, { maxSize = 800, overlap = 100 } = {}) {
-  // 先按标题分段
+export function chunkMarkdown(markdown, options = {}) {
   const sections = markdown.split(/\n(?=#{1,6}\s)/)
-  const result = []
-  let index = 0
+  const chunks = []
 
   for (const section of sections) {
     const trimmed = section.trim()
     if (!trimmed) continue
 
-    if (trimmed.length <= maxSize) {
-      result.push({ text: trimmed, index })
-      index++
-    } else {
-      // 段落太长时做滑动窗口
-      const subChunks = chunkText(trimmed, { chunkSize: maxSize, overlap })
-      for (const sub of subChunks) {
-        result.push({ text: sub.text, index })
-        index++
-      }
+    if (trimmed.length <= (options.chunkSize || 800)) {
+      chunks.push({
+        index: chunks.length,
+        start: 0,
+        end: trimmed.length,
+        text: trimmed,
+      })
+      continue
+    }
+
+    const subChunks = chunkText(trimmed, options)
+    for (const item of subChunks) {
+      chunks.push({
+        ...item,
+        index: chunks.length,
+      })
     }
   }
 
-  return result
+  return chunks
 }
 ```
 
+这段代码值得保留，因为后面排查“为什么命中了不相关 chunk”时，第一步往往就是先看切分结果。
+
 ---
 
-## 四、Embedding 模块
+## 五、补回一个批量 `embedder.js`
 
 ```js
 // embedder.js
-import OpenAI from 'openai'
+import { embeddingClient } from './clients.js'
 
-const client = new OpenAI({
-  apiKey: process.env.DEEPSEEK_API_KEY,
-  baseURL: process.env.DEEPSEEK_BASEURL || 'https://api.deepseek.com'
-})
+const BATCH_SIZE = Number(process.env.EMBEDDING_BATCH_SIZE || 16)
 
-/**
- * 为单条文本生成 embedding 向量
- */
-export async function embedText(text, model = 'text-embedding-v3') {
-  const response = await client.embeddings.create({
-    model,
-    input: text.replace(/\n/g, ' ')
-  })
-  return response.data[0].embedding
+function normalizeText(text) {
+  return text.replace(/\s+/g, ' ').trim()
 }
 
-/**
- * 批量生成 embeddings，支持分批避免超限
- */
-export async function embedBatch(texts, model = 'text-embedding-v3', batchSize = 20) {
-  const results = []
+export async function embedTexts(texts) {
+  if (texts.length === 0) return []
 
-  for (let i = 0; i < texts.length; i += batchSize) {
-    const batch = texts.slice(i, i + batchSize)
-    const response = await client.embeddings.create({
-      model,
-      input: batch.map(t => t.replace(/\n/g, ' '))
+  const normalized = texts.map((text) => normalizeText(text))
+  const vectors = []
+
+  for (let i = 0; i < normalized.length; i += BATCH_SIZE) {
+    const batch = normalized.slice(i, i + BATCH_SIZE)
+
+    const response = await embeddingClient.embeddings.create({
+      model: process.env.EMBEDDING_MODEL,
+      input: batch,
     })
-    results.push(...response.data.map(d => d.embedding))
 
-    // 简单限流，避免触发 rate limit
-    if (i + batchSize < texts.length) {
-      await new Promise(resolve => setTimeout(resolve, 200))
-    }
+    const ordered = [...response.data]
+      .sort((a, b) => a.index - b.index)
+      .map((item) => item.embedding)
+
+    vectors.push(...ordered)
   }
 
-  return results
+  return vectors
 }
 ```
 
+这里恢复“分批 embedding”的长示例，是因为这一步在真实项目里很重要：
+
+- 方便后续做速率限制
+- 容易加缓存
+- 能清晰看到 batch 行为
+
 ---
 
-## 五、向量存储模块
+## 六、补回 `vector-store.js`
 
 ```js
-// vectorStore.js
+// vector-store.js
+function cosineSimilarity(a, b) {
+  let dot = 0
+  let normA = 0
+  let normB = 0
 
-/**
- * 余弦相似度
- */
-function cosineSimilarity(vecA, vecB) {
-  let dot = 0, normA = 0, normB = 0
-  for (let i = 0; i < vecA.length; i++) {
-    dot   += vecA[i] * vecB[i]
-    normA += vecA[i] * vecA[i]
-    normB += vecB[i] * vecB[i]
+  for (let i = 0; i < a.length; i += 1) {
+    dot += a[i] * b[i]
+    normA += a[i] * a[i]
+    normB += b[i] * b[i]
   }
+
   if (normA === 0 || normB === 0) return 0
   return dot / (Math.sqrt(normA) * Math.sqrt(normB))
 }
 
-/**
- * 内存向量存储
- * 每条记录: { id, text, embedding, metadata }
- */
 export class VectorStore {
   constructor() {
     this.records = []
   }
 
-  /**
-   * 添加一条记录
-   */
-  add(id, text, embedding, metadata = {}) {
-    this.records.push({ id, text, embedding, metadata })
+  async upsert(records) {
+    const ids = new Set(records.map((record) => record.id))
+    this.records = this.records.filter((record) => !ids.has(record.id))
+    this.records.push(...records)
   }
 
-  /**
-   * Top-K 相似度检索
-   * @param {number[]} queryEmbedding
-   * @param {number} topK
-   * @returns {Array<{text, metadata, score}>}
-   */
-  search(queryEmbedding, topK = 5) {
-    const scored = this.records.map(record => ({
-      text: record.text,
-      metadata: record.metadata,
-      score: cosineSimilarity(queryEmbedding, record.embedding)
-    }))
-
-    return scored
+  search(queryVector, topK = 5, threshold = 0) {
+    return this.records
+      .map((record) => ({
+        ...record,
+        score: cosineSimilarity(queryVector, record.vector),
+      }))
+      .filter((record) => record.score >= threshold)
       .sort((a, b) => b.score - a.score)
       .slice(0, topK)
   }
 
-  /**
-   * 返回当前存储的记录数
-   */
   size() {
     return this.records.length
   }
 
-  /**
-   * 清空存储
-   */
   clear() {
     this.records = []
   }
 }
 ```
 
+这版保留了最关键的三个能力：
+
+1. `upsert()` 可以重复导入同一批 chunk
+2. `search()` 能带 `threshold`
+3. `size()` 便于做健康检查和调试输出
+
 ---
 
-## 六、核心：RagPipeline 类
+## 七、一个更完整的 `RagPipeline`
 
 ```js
 // RagPipeline.js
-import OpenAI from 'openai'
 import { chunkMarkdown } from './chunker.js'
-import { embedText, embedBatch } from './embedder.js'
-import { VectorStore } from './vectorStore.js'
-
-const client = new OpenAI({
-  apiKey: process.env.DEEPSEEK_API_KEY,
-  baseURL: process.env.DEEPSEEK_BASEURL || 'https://api.deepseek.com'
-})
+import { embedTexts } from './embedder.js'
+import { llmClient } from './clients.js'
 
 export class RagPipeline {
-  constructor(options = {}) {
-    this.chunkSize   = options.chunkSize   ?? 600
-    this.overlap     = options.overlap     ?? 100
-    this.topK        = options.topK        ?? 5
-    this.embedModel  = options.embedModel  ?? 'text-embedding-v3'
-    this.chatModel   = options.chatModel   ?? 'deepseek-chat'
-    this.store       = new VectorStore()
+  constructor({ vectorStore, chunkOptions = {} }) {
+    this.vectorStore = vectorStore
+    this.chunkOptions = chunkOptions
+    this.llmModel = process.env.LLM_MODEL || 'deepseek-chat'
+    this.topK = Number(process.env.TOP_K || 5)
+    this.threshold = Number(process.env.SIMILARITY_THRESHOLD || 0.5)
   }
 
-  // ─────────────────────────────────────────────
-  // Ingest：文档入库
-  // ─────────────────────────────────────────────
+  async ingestDocument(docId, text, metadata = {}) {
+    const chunks = chunkMarkdown(text, this.chunkOptions)
+    const vectors = await embedTexts(chunks.map((chunk) => chunk.text))
 
-  /**
-   * 将一篇文档入库
-   * @param {string} docText   - 文档原文
-   * @param {object} docMeta   - 文档元数据，如 { source, title }
-   */
-  async ingest(docText, docMeta = {}) {
-    // Step 1: Chunk
-    const chunks = chunkMarkdown(docText, {
-      maxSize: this.chunkSize,
-      overlap:  this.overlap
-    })
+    const records = chunks.map((chunk, index) => ({
+      id: `${docId}:${index}`,
+      text: chunk.text,
+      vector: vectors[index],
+      metadata: {
+        ...metadata,
+        chunkIndex: index,
+        chunkStart: chunk.start,
+        chunkEnd: chunk.end,
+      },
+    }))
 
-    console.log(`[Ingest] 文档切分完成，共 ${chunks.length} 个 chunk`)
+    await this.vectorStore.upsert(records)
 
-    // Step 2: Embed（批量）
-    const texts = chunks.map(c => c.text)
-    const embeddings = await embedBatch(texts, this.embedModel)
+    return {
+      chunkCount: records.length,
+      records,
+    }
+  }
 
-    console.log(`[Ingest] Embedding 完成，向量维度: ${embeddings[0].length}`)
+  async retrieve(question, options = {}) {
+    const [queryVector] = await embedTexts([question])
 
-    // Step 3: Store
-    for (let i = 0; i < chunks.length; i++) {
-      const id = `${docMeta.source ?? 'doc'}_chunk_${chunks[i].index}`
-      this.store.add(id, chunks[i].text, embeddings[i], {
-        ...docMeta,
-        chunkIndex: chunks[i].index
+    return this.vectorStore.search(
+      queryVector,
+      options.topK ?? this.topK,
+      options.threshold ?? this.threshold,
+    )
+  }
+
+  buildContext(hits) {
+    return hits
+      .map((item, index) => {
+        const source = item.metadata?.source || 'unknown'
+        return `[来源${index + 1} | ${source} | score=${item.score.toFixed(4)}]\n${item.text}`
       })
-    }
-
-    console.log(`[Ingest] 入库完成，当前存储总量: ${this.store.size()} 条`)
-    return chunks.length
+      .join('\n\n---\n\n')
   }
 
-  // ─────────────────────────────────────────────
-  // Query：问答检索
-  // ─────────────────────────────────────────────
+  async answer(question, options = {}) {
+    const hits = await this.retrieve(question, options)
+    const context = this.buildContext(hits)
 
-  /**
-   * 对用户问题进行 RAG 问答
-   * @param {string} question
-   * @returns {Promise<{answer: string, context: Array}>}
-   */
-  async query(question) {
-    if (this.store.size() === 0) {
-      throw new Error('向量存储为空，请先调用 ingest() 入库')
-    }
-
-    // Step 1: Query Embedding
-    const queryVec = await embedText(question, this.embedModel)
-
-    // Step 2: 向量检索 Top-K
-    const results = this.store.search(queryVec, this.topK)
-
-    console.log(`[Query] 检索完成，Top-${this.topK} 结果:`)
-    results.forEach((r, i) => {
-      console.log(`  [${i + 1}] score=${r.score.toFixed(4)}  ${r.text.slice(0, 60)}...`)
-    })
-
-    // Step 3: 组装 Prompt
-    const contextText = results
-      .map((r, i) => `[参考 ${i + 1}]\n${r.text}`)
-      .join('\n\n---\n\n')
-
-    const systemPrompt = `你是一个专业的问答助手。请根据以下参考内容回答用户的问题。
-如果参考内容中没有相关信息，请如实说明，不要编造。`
-
-    const userPrompt = `参考内容：
-${contextText}
-
-用户问题：${question}`
-
-    // Step 4: LLM 生成
-    const response = await client.chat.completions.create({
-      model: this.chatModel,
+    const response = await llmClient.chat.completions.create({
+      model: this.llmModel,
       messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user',   content: userPrompt }
+        {
+          role: 'system',
+          content: '你是文档问答助手，只能基于提供的上下文回答。如果资料不足，请明确说“文档中未提及”。',
+        },
+        {
+          role: 'user',
+          content: `参考内容：\n${context}\n\n问题：${question}`,
+        },
       ],
-      temperature: 0.3
+      temperature: 0.2,
     })
 
-    const answer = response.choices[0].message.content
-
-    return { answer, context: results }
+    return {
+      answer: response.choices[0]?.message?.content || '',
+      hits,
+    }
   }
 }
 ```
 
+现在这版 `RagPipeline` 保留了“骨架清晰”的优点，也把真实项目常用的细节补回来了：
+
+- 入库时保留 chunk 范围信息
+- 检索时支持 `threshold`
+- Prompt 里带简单来源与得分
+
 ---
 
-## 七、入口示例
+## 八、补回一个端到端 `index.js`
 
 ```js
 // index.js
 import 'dotenv/config'
 import { RagPipeline } from './RagPipeline.js'
+import { VectorStore } from './vector-store.js'
 
-// ── 示例文档 ──────────────────────────────────────
-const doc = `
-# DeepSeek API 使用指南
+const demoDoc = `
+# DeepSeek API 使用说明
 
-## 模型列表
+## 模型职责
 
-DeepSeek 提供以下主要模型：
+在这个项目里，DeepSeek 负责最终回答生成；embedding 使用本地 OpenAI-compatible 服务。
 
-- deepseek-chat：通用对话模型，适合问答、写作、分析
-- deepseek-coder：代码专用模型，适合编程任务
-- text-embedding-v3：文本向量模型，适合语义检索
+## 工具调用
 
-## 快速开始
+如果你要做 function calling，请使用 deepseek-chat，不要把 deepseek-reasoner 放进工具循环。
 
-调用 DeepSeek API 需要在请求头中携带 API Key：
+## RAG 约束
 
-\`\`\`bash
-curl https://api.deepseek.com/chat/completions \\
-  -H "Authorization: Bearer $DEEPSEEK_API_KEY" \\
-  -d '{"model":"deepseek-chat","messages":[{"role":"user","content":"你好"}]}'
-\`\`\`
-
-## 计费方式
-
-DeepSeek 按 token 计费。input token 和 output token 单独计价。
-使用 embedding 模型时，只有 input token 产生费用。
-
-## 常见错误
-
-- 401 Unauthorized：API Key 无效或过期
-- 429 Too Many Requests：请求频率超限，需要降速或分批
-- 500 Internal Server Error：服务端错误，稍后重试
+向量化与检索由本地 embedding 服务完成，回答阶段再把检索结果交给 DeepSeek 生成。
 `
 
-// ── 运行 Pipeline ─────────────────────────────────
 async function main() {
+  const vectorStore = new VectorStore()
   const pipeline = new RagPipeline({
-    chunkSize: 400,
-    overlap: 80,
-    topK: 3
+    vectorStore,
+    chunkOptions: {
+      chunkSize: Number(process.env.CHUNK_SIZE || 800),
+      overlap: Number(process.env.CHUNK_OVERLAP || 160),
+    },
   })
 
-  // 入库
-  await pipeline.ingest(doc, { source: 'deepseek-guide', title: 'DeepSeek API 使用指南' })
+  const ingestResult = await pipeline.ingestDocument('deepseek-guide', demoDoc, {
+    source: 'deepseek-guide.md',
+    title: 'DeepSeek API 使用说明',
+  })
 
-  // 问答
-  const questions = [
-    'DeepSeek 有哪些模型？',
-    '如何快速调用 DeepSeek API？',
-    '遇到 429 错误怎么办？',
-    'embedding 模型怎么计费？'
-  ]
+  console.log('[ingest] chunkCount =', ingestResult.chunkCount)
+  console.log('[ingest] vectorStore size =', vectorStore.size())
 
-  for (const q of questions) {
-    console.log('\n' + '='.repeat(60))
-    console.log(`问题: ${q}`)
-    const { answer } = await pipeline.query(q)
-    console.log(`回答:\n${answer}`)
-  }
+  const { answer, hits } = await pipeline.answer('这个项目里谁负责 embedding，谁负责最终回答？')
+
+  console.log('\n[hits]')
+  hits.forEach((item, index) => {
+    console.log(`${index + 1}. score=${item.score.toFixed(4)} ${item.metadata.source}`)
+  })
+
+  console.log('\n[answer]')
+  console.log(answer)
 }
 
-main().catch(console.error)
+main().catch((error) => {
+  console.error(error)
+  process.exit(1)
+})
 ```
 
 ---
 
-## 八、验证步骤
+## 九、验证步骤
 
 1. 安装依赖：`npm install openai dotenv`
-2. 创建 `.env` 文件，写入 `DEEPSEEK_API_KEY=your-key`
-3. 运行：`node index.js`
-4. 观察控制台输出：
-   - Ingest 阶段：chunk 数量、向量维度、入库总量
-   - Query 阶段：Top-K 检索结果及相似度分数
-   - 最终答案是否来自原文
-
-### 预期输出示意
-
-```text
-[Ingest] 文档切分完成，共 6 个 chunk
-[Ingest] Embedding 完成，向量维度: 1024
-[Ingest] 入库完成，当前存储总量: 6 条
-
-============================================================
-问题: DeepSeek 有哪些模型？
-[Query] 检索完成，Top-3 结果:
-  [1] score=0.9123  DeepSeek 提供以下主要模型：...
-  [2] score=0.7841  调用 DeepSeek API 需要在请求头中...
-  [3] score=0.7102  DeepSeek 按 token 计费...
-回答:
-DeepSeek 提供三款主要模型：
-1. deepseek-chat：通用对话模型
-2. deepseek-coder：代码专用模型
-3. text-embedding-v3：文本向量模型
-```
+2. 启动本地 embedding 服务，并确认 `EMBEDDING_BASE_URL` 与 `EMBEDDING_MODEL` 可用
+3. 写好 `.env` 后执行：`node index.js`
+4. 核对输出：
+   - `chunkCount` 是否大于 0
+   - `vectorStore size` 是否等于 chunk 数量
+   - 检索结果是否来自正确段落
+   - 最终答案是否遵守“DeepSeek 只负责生成”的边界
 
 ---
 
-## 小结
+## 十、小结
 
-1. RAG Pipeline 有两条主干流程：Ingest（写入）和 Query（读出），共享同一个向量存储。
-2. `RagPipeline` 类把 chunk、embed、store、search、chat 五个阶段统一封装，配置集中、边界清晰。
-3. 批量 embedding（`embedBatch`）比逐条调用显著减少 API 次数，是生产中的必要做法。
-4. Prompt 组装时把 Top-K chunks 以编号方式拼入，是 RAG 最基本的上下文注入模式。
-5. 这一节的 Pipeline 是后续所有扩展的基础骨架，rerank、query 重写、citation、cache 都将在此基础上叠加。
+这一节最重要的不是 `RagPipeline` 这个类名，而是这条主线：
+
+1. 本地 embedding 负责向量化
+2. DeepSeek 负责回答
+3. 两者用独立配置管理
+4. 教程里依然要保留足够完整的模块示例，方便你后面直接拿去改项目
+
+下一节我们继续在这个边界上加 rerank。

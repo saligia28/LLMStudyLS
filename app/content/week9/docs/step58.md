@@ -1,106 +1,82 @@
-# Step 58: Embedding + 向量存储｜用 OpenAI/DeepSeek 做 embedding
+# Step 58: Embedding + 向量存储｜用本地 OpenAI-compatible 服务做 embedding
 
 ## 学习目标
 
-这一节的本质问题是：**如何把一批文本稳定地转成向量，并且把输入输出组织成工程里可用的形态？**
+这一节回答的核心问题是：**在 DeepSeek 主线下，embedding 应该由谁来负责？**
 
-通过本教程，你将：
+完成后你应该能：
 
-1. 理解 embedding API 的输入、输出和常见返回结构
-2. 学会使用 OpenAI 或 DeepSeek 这类兼容接口生成文本向量
-3. 搞清楚为什么批量调用比逐条调用更适合做索引构建
-4. 学会把结果整理成后续向量库 upsert 能直接消费的数据
-5. 为本地向量库、search 查询和 service 封装做好准备
+1. 理解为什么要把“生成模型”和“embedding 模型”拆开配置
+2. 使用本地 OpenAI-compatible embedding 服务生成向量
+3. 建立 `LLM_MODEL` 与 `EMBEDDING_MODEL` 分层配置
+4. 为后续 RAG 主线准备稳定的本地向量化入口
 
-> **本节目标**：把“文本向量化”真正接进工程流程，而不是停留在概念层。
-
----
-
-## 一、先看清楚：embedding API 到底做了什么
-
-### 1.1 输入是什么
-
-embedding API 的输入通常很简单：字符串，或者字符串数组。
-
-```js
-[
-  '如何重置密码',
-  '账号密码找回',
-  '修改登录口令'
-]
-```
-
-如果你的场景是建索引，输入一般来自切好的文档块；如果你的场景是在线检索，输入通常就是用户的查询文本。
-
-### 1.2 输出是什么
-
-输出的核心部分是一组向量。每个输入文本都会得到一个向量，顺序和输入顺序一一对应。
-
-```js
-{
-  data: [
-    { index: 0, embedding: [0.12, -0.03, 0.87, ...] },
-    { index: 1, embedding: [0.11, -0.02, 0.85, ...] },
-    { index: 2, embedding: [0.09, -0.01, 0.83, ...] }
-  ],
-  usage: {
-    prompt_tokens: 42,
-    total_tokens: 42
-  }
-}
-```
-
-你后面真正会用到的，通常不是整个响应，而是：
-
-- `data[i].embedding`
-- 输入文本和向量的一一映射
-- 可能附带的 token 统计信息
-
-### 1.3 为什么它适合做批量
-
-如果你有 100 段文本要入库，最怕的是 100 次单条请求。那样会让网络开销、限流风险和失败重试成本都变高。
-
-把多个文本一次性传进去，通常更适合：
-
-- 索引构建
-- demo 数据导入
-- 离线批处理
-- 需要保序的向量生成任务
+> **本节默认能力边界**：DeepSeek 负责聊天、改写、rerank 与最终回答；embedding 默认交给本地 OpenAI-compatible 服务，例如 Ollama、vLLM 前的本地嵌入服务，或其他兼容接口。不要把 DeepSeek 聊天模型和 embedding provider 混为一谈。
 
 ---
 
-## 二、OpenAI / DeepSeek 的接法
+## 一、为什么要拆成两条模型链
 
-### 2.1 兼容接口的核心思路
+从这一周开始，请把模型能力分成两类：
 
-如果你的 DeepSeek 接口支持 OpenAI 兼容形式，那么代码形态通常非常接近。你只需要切换：
+```text
+生成链路
+  LLM_BACKEND / LLM_MODEL
+  负责：回答、改写、总结、rerank
 
-- `apiKey`
-- `baseURL`
-- `model`
+向量链路
+  EMBEDDING_BACKEND / EMBEDDING_MODEL
+  负责：文档向量、查询向量
+```
 
-其他调用方式大体一致。
+这样做的原因是：
 
-### 2.2 一个最小的批量 embedding 示例
+1. 生成模型和 embedding 模型不是一回事
+2. 它们的接口稳定性、成本和部署方式都不同
+3. 后面切换本地向量服务时，不需要动 DeepSeek 主线
+
+---
+
+## 二、推荐的环境变量分层
+
+```bash
+# 生成模型
+DEEPSEEK_API_KEY=your-key
+DEEPSEEK_BASEURL=https://api.deepseek.com
+LLM_MODEL=deepseek-chat
+
+# 本地 embedding 服务
+EMBEDDING_BACKEND=openai-compatible
+EMBEDDING_BASE_URL=http://localhost:11434/v1
+EMBEDDING_API_KEY=ollama
+EMBEDDING_MODEL=nomic-embed-text
+```
+
+其中：
+
+- `LLM_MODEL` 只负责生成
+- `EMBEDDING_MODEL` 只负责向量化
+
+---
+
+## 三、一个最小 embedding 客户端
 
 ```js
 import OpenAI from 'openai'
 
-const client = new OpenAI({
-  apiKey: process.env.EMBEDDING_API_KEY,
+const embeddingClient = new OpenAI({
+  apiKey: process.env.EMBEDDING_API_KEY || 'local',
   baseURL: process.env.EMBEDDING_BASE_URL,
 })
 
-export async function embedTexts(texts, model = 'text-embedding-3-small') {
+export async function embedTexts(texts, model = process.env.EMBEDDING_MODEL) {
   const normalized = texts
     .map((text) => text.replace(/\s+/g, ' ').trim())
     .filter(Boolean)
 
-  if (normalized.length === 0) {
-    return []
-  }
+  if (normalized.length === 0) return []
 
-  const response = await client.embeddings.create({
+  const response = await embeddingClient.embeddings.create({
     model,
     input: normalized,
   })
@@ -113,110 +89,64 @@ export async function embedTexts(texts, model = 'text-embedding-3-small') {
 }
 ```
 
-这段代码背后的设计重点有三个：
+这个版本和后面 RAG 主线的契合点有三个：
 
-1. 先做输入归一化，减少无意义差异
-2. 批量传入，减少请求次数
-3. 返回时把原文和向量重新绑定，方便后面写库
-
-### 2.3 DeepSeek 也能这么用吗
-
-如果你的 DeepSeek 提供的是 OpenAI 兼容接口，通常可以直接复用上面的写法，只要把配置换成对应服务即可。
-
-你可以把它理解成：
-
-- **同一套 SDK**
-- **不同的服务地址**
-- **不同的模型名称**
-
-这样做的好处是，后面你切 provider 时不用重写整条向量化链路。
+1. 客户端和 DeepSeek 聊天客户端彻底分开
+2. 接口形状和 OpenAI SDK 一致，易于替换
+3. 输出直接可喂给向量库存储
 
 ---
 
-## 三、批量调用的关键细节
+## 四、为什么这里默认用本地 embedding
 
-### 3.1 不要把超长内容直接丢给模型
+本地 embedding 的好处是：
 
-embedding 并不等于“整篇文档一把梭”。如果文本太长，常见问题有：
+- 更适合做大量文档入库
+- 配置上和主聊天模型解耦
+- 后面做缓存和批量索引时更稳定
 
-- 输入超过模型限制
-- 语义被稀释
-- 一次向量覆盖多个主题，检索效果变差
+你可以把这条路线理解成：
 
-所以在真正做索引时，通常会先切分，再 embedding。切分策略我们会在 Step 63 详细讲。
-
-### 3.2 批量大小不是越大越好
-
-你需要平衡三件事：
-
-- 请求效率
-- 单次失败的影响范围
-- 服务端限流和超时
-
-一个合理的做法是：
-
-1. 先按文本长度预处理
-2. 再按批次大小提交
-3. 出错时只重试失败批次
-
-### 3.3 保持顺序映射
-
-批量调用后，向量和原文本必须一一对应。最稳妥的做法是同时维护一个结构化数组：
-
-```js
-const inputs = [
-  { id: 'doc-1', text: '如何重置密码' },
-  { id: 'doc-2', text: '账号密码找回' },
-]
-
-const vectors = await embedTexts(inputs.map((item) => item.text))
-
-const records = inputs.map((item, index) => ({
-  id: item.id,
-  text: item.text,
-  vector: vectors[index].vector,
-}))
+```text
+DeepSeek = 生成大脑
+Local Embedding = 检索底座
 ```
 
-这样后面进入 upsert 时，你不用再猜“这个向量到底对应哪段文本”。
-
 ---
 
-## 四、一个更接近真实工程的封装方式
+## 五、工程上要统一的数据形状
 
-如果你希望这一步能直接支撑向量库写入，建议把返回值整理成统一结构：
+推荐统一成：
 
 ```js
-export async function embedDocuments(documents, options = {}) {
-  const texts = documents.map((doc) => doc.text)
-  const embedded = await embedTexts(texts, options.model)
+export async function embedDocuments(documents) {
+  const vectors = await embedTexts(documents.map((doc) => doc.text))
 
   return documents.map((doc, index) => ({
     id: doc.id,
     text: doc.text,
-    vector: embedded[index].vector,
+    vector: vectors[index].vector,
     metadata: doc.metadata ?? {},
   }))
 }
 ```
 
-这里的关键不是“有没有高级抽象”，而是下面这几个约定是否稳定：
+后面无论是：
 
-- 输入始终是文档对象数组
-- 输出始终包含 `id / text / vector / metadata`
-- 业务层不直接碰 SDK 的原始返回
-- 后续存储和检索都沿用同样的数据形状
+- 写入向量库
+- 做 query embedding
+- 加缓存
 
-这种统一形状，会让你后面做向量库写入和 search 查询时轻松很多。
+都沿用同样的数据结构，就不会在不同章节里反复换形状。
 
 ---
 
-## 五、总结
+## 六、小结
 
-这一节你要真正带走的，是 embedding API 的三件事：
+从这一节开始，请固定一个新的学习习惯：
 
-1. 它把文本转成向量，向量才是后续检索的基础
-2. 批量调用比单条调用更适合索引构建
-3. 结果一定要整理成“可写入、可查询、可追踪”的结构
+1. DeepSeek 负责生成，不负责 embedding 这条必修主线
+2. embedding 统一走本地 OpenAI-compatible 服务
+3. 配置上始终分成 `LLM_*` 和 `EMBEDDING_*`
 
-下一步，我们就把这些向量写进本地向量库，看看 `upsert` 到底应该怎么设计。
+下一节我们就把这些向量真正写进本地向量库。

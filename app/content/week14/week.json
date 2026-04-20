@@ -1,14 +1,14 @@
 {
   "id": "week14",
-  "title": "Week 14: vLLM 高性能推理",
-  "description": "学习 vLLM 的核心技术（PagedAttention、连续批处理），掌握 vLLM API 服务的部署与调优，并与 Ollama 做系统对比，最终接入前端 chat 应用。",
+  "title": "Week 14: vLLM 高性能推理（进阶选修）",
+  "description": "作为 DeepSeek 主线之外的进阶选修，学习 vLLM 的核心技术（PagedAttention、连续批处理），掌握 vLLM API 服务的部署与调优，并与 Ollama 做系统对比，最终接入前端 chat 应用。",
   "order": 14,
   "steps": [
     {
       "id": "step92",
       "order": 92,
       "title": "安装 vLLM",
-      "description": "了解 vLLM 的定位与架构优势，完成 GPU 环境准备，通过 pip 或 Docker 安装 vLLM 并进行冒烟验证。",
+      "description": "了解 vLLM 的定位与架构优势，完成 GPU 环境准备，通过 pip 或 Docker 安装 vLLM 并进行冒烟验证，建立高并发部署选修路径。",
       "docFile": "step92.md",
       "codeDir": "vllm-setup",
       "canManual": false,
@@ -58,7 +58,7 @@
       "id": "step97",
       "order": 97,
       "title": "接入你的 chat 前端",
-      "description": "修改 Express 后端将 LLM 请求路由至本地 vLLM 服务，实现 DeepSeek / Ollama / vLLM 的无缝切换，完成端到端流式验证。",
+      "description": "修改 Express 后端将默认 DeepSeek 请求在需要时路由至本地 vLLM 服务，实现 DeepSeek-first 的无缝切换，完成端到端流式验证。",
       "docFile": "step97.md",
       "codeDir": "chat-frontend-integration",
       "canManual": false,
